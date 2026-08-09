@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "asyncblock"
+version = "0.1.0"
+description = "Find blocking synchronous calls inside async def functions"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{ name = "AsyncBlock Contributors" }]
+keywords = ["asyncio", "static-analysis", "lint", "async"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = []
+
+[project.optional-dependencies]
+rich = ["rich>=13.0.0"]
+dev = ["pytest>=7.0.0", "ruff>=0.4.0"]
+
+[project.scripts]
+asyncblock = "asyncblock.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["asyncblock"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/fixtures/**" = ["ASYNC", "PLW1510"]
