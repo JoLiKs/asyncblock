@@ -6,10 +6,12 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import cast
 
 from asyncblock import __version__
 from asyncblock.analyzer import analyze_tree
-from asyncblock.models import Finding
+from asyncblock.models import Finding, RuleInfo, Severity
+from asyncblock.rules import list_rules
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -46,6 +48,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default="warning",
         help="Minimum severity to report (default: warning)",
     )
+
+    rules = subparsers.add_parser("rules", help="List built-in detection rules")
+    rules.add_argument(
+        "--json",
+        action="store_true",
+        help="Output rules as JSON",
+    )
     return parser
 
 
@@ -64,8 +73,7 @@ def _format_text(findings: list[Finding]) -> str:
         table.add_column("Suggestion", style="green")
 
         for finding in findings:
-            location = f"{finding.file}:{finding.line}"
-            table.add_row(location, finding.rule_id, finding.message, finding.suggestion)
+            table.add_row(finding.location, finding.rule_id, finding.message, finding.suggestion)
 
         console = Console()
         with console.capture() as capture:
@@ -74,11 +82,57 @@ def _format_text(findings: list[Finding]) -> str:
     except ImportError:
         lines = ["Location\tRule\tMessage\tSuggestion"]
         for finding in findings:
-            location = f"{finding.file}:{finding.line}"
             lines.append(
-                f"{location}\t{finding.rule_id}\t{finding.message}\t{finding.suggestion}"
+                f"{finding.location}\t{finding.rule_id}\t{finding.message}\t{finding.suggestion}"
             )
         return "\n".join(lines)
+
+
+def _format_rules_text(rules: tuple[RuleInfo, ...]) -> str:
+    if not rules:
+        return "No built-in rules configured."
+
+    try:
+        from rich.console import Console
+        from rich.table import Table
+
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Rule", style="magenta", no_wrap=True)
+        table.add_column("Patterns")
+        table.add_column("Severity")
+        table.add_column("Suggestion", style="green")
+
+        for rule in rules:
+            table.add_row(
+                rule.rule_id,
+                ", ".join(rule.patterns),
+                rule.severity,
+                rule.suggestion,
+            )
+
+        console = Console()
+        with console.capture() as capture:
+            console.print(table)
+        return capture.get()
+    except ImportError:
+        lines = ["Rule\tPatterns\tSeverity\tSuggestion"]
+        for rule in rules:
+            lines.append(
+                f"{rule.rule_id}\t{', '.join(rule.patterns)}\t{rule.severity}\t{rule.suggestion}"
+            )
+        return "\n".join(lines)
+
+
+def _run_rules(args: argparse.Namespace) -> int:
+    rules = list_rules()
+
+    if args.json:
+        payload = [rule.to_dict() for rule in rules]
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(_format_rules_text(rules))
+
+    return 0
 
 
 def _run_scan(args: argparse.Namespace) -> int:
@@ -90,7 +144,7 @@ def _run_scan(args: argparse.Namespace) -> int:
     findings = analyze_tree(
         path,
         exclude=args.exclude,
-        min_severity=args.severity,  # type: ignore[arg-type]
+        min_severity=cast(Severity, args.severity),
     )
 
     if args.json:
@@ -110,6 +164,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "scan":
         return _run_scan(args)
+    if args.command == "rules":
+        return _run_rules(args)
     return 0
 
 

@@ -39,6 +39,12 @@ asyncblock scan . --exclude "tests/*" --exclude "**/migrations/*"
 
 # Показывать только findings уровня error
 asyncblock scan . --severity error
+
+# Посмотреть встроенные правила детекции
+asyncblock rules
+
+# JSON-каталог правил для документации или CI
+asyncblock rules --json
 ```
 
 ### Пример вывода
@@ -50,6 +56,16 @@ app/db.py:18                      BLOCK_DB         Blocking sqlite3.connect() in
 ```
 
 Код выхода: `0` — проблем не найдено (или только warning), `1` — есть findings уровня **error**.
+
+### Команда `rules`
+
+Показывает все встроенные правила с паттернами вызовов, уровнем severity и рекомендациями — удобно при настройке CI или при добавлении своих правил:
+
+```
+Rule              Patterns                                      Severity  Suggestion
+BLOCK_SLEEP       time.sleep()                                  error     Use asyncio.sleep() or anyio.sleep()
+BLOCK_HTTP        requests.get(), requests.post(), …            error     Use httpx.AsyncClient or aiohttp.ClientSession
+```
 
 ## Встроенные правила
 
@@ -67,13 +83,16 @@ app/db.py:18                      BLOCK_DB         Blocking sqlite3.connect() in
 ## Использование как библиотеки
 
 ```python
-from asyncblock import analyze_file, analyze_tree, Finding
+from asyncblock import analyze_file, analyze_tree, Finding, list_rules
 
 findings: list[Finding] = analyze_file("app/handlers.py")
 for finding in findings:
-    print(f"{finding.file}:{finding.line} [{finding.rule_id}] {finding.message}")
+    print(f"{finding.location} [{finding.rule_id}] {finding.message}")
 
 all_findings = analyze_tree("./src", exclude=["tests/*"])
+
+for rule in list_rules():
+    print(rule.rule_id, rule.patterns)
 ```
 
 ## Как добавить своё правило

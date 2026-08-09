@@ -1,0 +1,37 @@
+"""Tests for the AsyncBlock CLI."""
+
+from __future__ import annotations
+
+import json
+
+from asyncblock.cli import main
+
+
+def test_rules_command_prints_catalog(capsys) -> None:
+    exit_code = main(["rules"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "BLOCK_SLEEP" in captured.out
+    assert "time.sleep()" in captured.out
+    assert "BLOCK_HTTP" in captured.out
+
+
+def test_rules_command_json_output(capsys) -> None:
+    exit_code = main(["rules", "--json"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+
+    payload = json.loads(captured.out)
+    assert isinstance(payload, list)
+    assert payload[0]["rule_id"]
+    assert isinstance(payload[0]["patterns"], list)
+
+
+def test_scan_command_missing_path_returns_error(capsys) -> None:
+    exit_code = main(["scan", "/path/that/does/not/exist"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "does not exist" in captured.err

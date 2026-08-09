@@ -9,6 +9,25 @@ Severity = Literal["warning", "error"]
 
 
 @dataclass(frozen=True, slots=True)
+class RuleInfo:
+    """Summary of a built-in detection rule for documentation and CLI listing."""
+
+    rule_id: str
+    patterns: tuple[str, ...]
+    suggestion: str
+    severity: Severity = "error"
+
+    def to_dict(self) -> dict[str, str | list[str]]:
+        """Serialize the rule summary to a plain dictionary."""
+        return {
+            "rule_id": self.rule_id,
+            "patterns": list(self.patterns),
+            "suggestion": self.suggestion,
+            "severity": self.severity,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class Finding:
     """A single blocking-call detection inside an async context."""
 
@@ -19,6 +38,11 @@ class Finding:
     message: str
     suggestion: str
     severity: Severity = "error"
+
+    @property
+    def location(self) -> str:
+        """Human-readable ``file:line`` location."""
+        return f"{self.file}:{self.line}"
 
     def to_dict(self) -> dict[str, str | int]:
         """Serialize the finding to a plain dictionary."""

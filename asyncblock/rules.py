@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
-Severity = Literal["warning", "error"]
+from asyncblock.models import RuleInfo, Severity
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,69 +20,41 @@ class Rule:
     builtin: str | None = None
 
 
+def _module_attr_rule(
+    rule_id: str,
+    module: str,
+    attr: str,
+    *,
+    suggestion: str,
+    severity: Severity = "error",
+) -> Rule:
+    """Build a rule for a ``module.attr()`` blocking call."""
+    return Rule(
+        rule_id=rule_id,
+        module=module,
+        attr=attr,
+        message=f"Blocking {module}.{attr}() inside async code",
+        suggestion=suggestion,
+        severity=severity,
+    )
+
+
+_HTTP_SUGGESTION = "Use httpx.AsyncClient or aiohttp.ClientSession"
+_SUBPROCESS_SUGGESTION = (
+    "Use asyncio.create_subprocess_exec() or asyncio.create_subprocess_shell()"
+)
+_SOCKET_SUGGESTION = "Use asyncio.open_connection() or asyncio streams"
+
 RULES: tuple[Rule, ...] = (
-    Rule(
-        rule_id="BLOCK_SLEEP",
-        module="time",
-        attr="sleep",
-        message="Blocking time.sleep() inside async code",
+    _module_attr_rule(
+        "BLOCK_SLEEP",
+        "time",
+        "sleep",
         suggestion="Use asyncio.sleep() or anyio.sleep()",
     ),
-    Rule(
-        rule_id="BLOCK_HTTP",
-        module="requests",
-        attr="get",
-        message="Blocking requests.get() inside async code",
-        suggestion="Use httpx.AsyncClient or aiohttp.ClientSession",
-    ),
-    Rule(
-        rule_id="BLOCK_HTTP",
-        module="requests",
-        attr="post",
-        message="Blocking requests.post() inside async code",
-        suggestion="Use httpx.AsyncClient or aiohttp.ClientSession",
-    ),
-    Rule(
-        rule_id="BLOCK_HTTP",
-        module="requests",
-        attr="put",
-        message="Blocking requests.put() inside async code",
-        suggestion="Use httpx.AsyncClient or aiohttp.ClientSession",
-    ),
-    Rule(
-        rule_id="BLOCK_HTTP",
-        module="requests",
-        attr="patch",
-        message="Blocking requests.patch() inside async code",
-        suggestion="Use httpx.AsyncClient or aiohttp.ClientSession",
-    ),
-    Rule(
-        rule_id="BLOCK_HTTP",
-        module="requests",
-        attr="delete",
-        message="Blocking requests.delete() inside async code",
-        suggestion="Use httpx.AsyncClient or aiohttp.ClientSession",
-    ),
-    Rule(
-        rule_id="BLOCK_HTTP",
-        module="requests",
-        attr="head",
-        message="Blocking requests.head() inside async code",
-        suggestion="Use httpx.AsyncClient or aiohttp.ClientSession",
-    ),
-    Rule(
-        rule_id="BLOCK_HTTP",
-        module="requests",
-        attr="options",
-        message="Blocking requests.options() inside async code",
-        suggestion="Use httpx.AsyncClient or aiohttp.ClientSession",
-    ),
-    Rule(
-        rule_id="BLOCK_HTTP",
-        module="requests",
-        attr="request",
-        message="Blocking requests.request() inside async code",
-        suggestion="Use httpx.AsyncClient or aiohttp.ClientSession",
+    *(
+        _module_attr_rule("BLOCK_HTTP", "requests", method, suggestion=_HTTP_SUGGESTION)
+        for method in ("get", "post", "put", "patch", "delete", "head", "options", "request")
     ),
     Rule(
         rule_id="BLOCK_FILE",
@@ -91,67 +62,52 @@ RULES: tuple[Rule, ...] = (
         message="Blocking open() inside async code",
         suggestion="Use aiofiles.open()",
     ),
-    Rule(
-        rule_id="BLOCK_SUBPROCESS",
-        module="subprocess",
-        attr="run",
-        message="Blocking subprocess.run() inside async code",
-        suggestion="Use asyncio.create_subprocess_exec() or asyncio.create_subprocess_shell()",
+    *(
+        _module_attr_rule("BLOCK_SUBPROCESS", "subprocess", attr, suggestion=_SUBPROCESS_SUGGESTION)
+        for attr in ("run", "call", "check_call", "check_output", "Popen")
     ),
-    Rule(
-        rule_id="BLOCK_SUBPROCESS",
-        module="subprocess",
-        attr="call",
-        message="Blocking subprocess.call() inside async code",
-        suggestion="Use asyncio.create_subprocess_exec() or asyncio.create_subprocess_shell()",
+    *(
+        _module_attr_rule("BLOCK_SOCKET", "socket", attr, suggestion=_SOCKET_SUGGESTION)
+        for attr in ("socket", "create_connection")
     ),
-    Rule(
-        rule_id="BLOCK_SUBPROCESS",
-        module="subprocess",
-        attr="check_call",
-        message="Blocking subprocess.check_call() inside async code",
-        suggestion="Use asyncio.create_subprocess_exec() or asyncio.create_subprocess_shell()",
-    ),
-    Rule(
-        rule_id="BLOCK_SUBPROCESS",
-        module="subprocess",
-        attr="check_output",
-        message="Blocking subprocess.check_output() inside async code",
-        suggestion="Use asyncio.create_subprocess_exec() or asyncio.create_subprocess_shell()",
-    ),
-    Rule(
-        rule_id="BLOCK_SUBPROCESS",
-        module="subprocess",
-        attr="Popen",
-        message="Blocking subprocess.Popen() inside async code",
-        suggestion="Use asyncio.create_subprocess_exec() or asyncio.create_subprocess_shell()",
-    ),
-    Rule(
-        rule_id="BLOCK_SOCKET",
-        module="socket",
-        attr="socket",
-        message="Blocking socket.socket() inside async code",
-        suggestion="Use asyncio.open_connection() or asyncio streams",
-    ),
-    Rule(
-        rule_id="BLOCK_SOCKET",
-        module="socket",
-        attr="create_connection",
-        message="Blocking socket.create_connection() inside async code",
-        suggestion="Use asyncio.open_connection() or asyncio streams",
-    ),
-    Rule(
-        rule_id="BLOCK_DB",
-        module="sqlite3",
-        attr="connect",
-        message="Blocking sqlite3.connect() inside async code",
+    _module_attr_rule(
+        "BLOCK_DB",
+        "sqlite3",
+        "connect",
         suggestion="Use aiosqlite.connect() or an async ORM driver",
     ),
-    Rule(
-        rule_id="BLOCK_DB",
-        module="psycopg2",
-        attr="connect",
-        message="Blocking psycopg2.connect() inside async code",
+    _module_attr_rule(
+        "BLOCK_DB",
+        "psycopg2",
+        "connect",
         suggestion="Use asyncpg.connect() or psycopg (v3) async API",
     ),
 )
+
+
+def _rule_pattern(rule: Rule) -> str:
+    if rule.builtin:
+        return f"{rule.builtin}()"
+    return f"{rule.module}.{rule.attr}()"
+
+
+def list_rules() -> tuple[RuleInfo, ...]:
+    """Return built-in rules grouped by ``rule_id`` with matched call patterns."""
+    grouped: dict[str, list[str]] = {}
+    severity: dict[str, Severity] = {}
+    suggestion: dict[str, str] = {}
+
+    for rule in RULES:
+        grouped.setdefault(rule.rule_id, []).append(_rule_pattern(rule))
+        severity[rule.rule_id] = rule.severity
+        suggestion[rule.rule_id] = rule.suggestion
+
+    return tuple(
+        RuleInfo(
+            rule_id=rule_id,
+            patterns=tuple(patterns),
+            suggestion=suggestion[rule_id],
+            severity=severity[rule_id],
+        )
+        for rule_id, patterns in grouped.items()
+    )

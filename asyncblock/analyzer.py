@@ -17,7 +17,7 @@ class _ImportMap:
         self.modules: dict[str, str] = {}
         self.from_imports: dict[str, tuple[str, str]] = {}
 
-    def visit(self, node: ast.AST) -> None:
+    def collect_from(self, node: ast.AST) -> None:
         for child in ast.walk(node):
             if isinstance(child, ast.Import):
                 for alias in child.names:
@@ -41,15 +41,15 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
         self.findings: list[Finding] = []
         self.imports = _ImportMap()
         self._async_depth = 0
-        self._nested_sync_under_async = 0
+        self._nested_sync_depth = 0
 
     def visit_Module(self, node: ast.Module) -> None:
-        self.imports.visit(node)
+        self.imports.collect_from(node)
         self.generic_visit(node)
 
     @property
     def _in_async_context(self) -> bool:
-        return self._async_depth > 0 or self._nested_sync_under_async > 0
+        return self._async_depth > 0 or self._nested_sync_depth > 0
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._async_depth += 1
@@ -59,10 +59,10 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         nested = self._async_depth > 0
         if nested:
-            self._nested_sync_under_async += 1
+            self._nested_sync_depth += 1
         self.generic_visit(node)
         if nested:
-            self._nested_sync_under_async -= 1
+            self._nested_sync_depth -= 1
 
     def visit_Call(self, node: ast.Call) -> None:
         if self._in_async_context:
