@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from asyncblock.cli import main
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def test_rules_command_prints_catalog(capsys) -> None:
@@ -35,3 +38,15 @@ def test_scan_command_missing_path_returns_error(capsys) -> None:
     captured = capsys.readouterr()
     assert exit_code == 2
     assert "does not exist" in captured.err
+
+
+def test_scan_command_rule_filter(capsys) -> None:
+    exit_code = main(["scan", str(FIXTURES), "--rule", "BLOCK_SLEEP", "--json"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+
+    payload = json.loads(captured.out)
+    assert payload
+    assert all(item["rule_id"] == "BLOCK_SLEEP" for item in payload)
+    assert not any(item["rule_id"] == "BLOCK_HTTP" for item in payload)

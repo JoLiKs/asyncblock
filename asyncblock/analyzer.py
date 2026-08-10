@@ -14,8 +14,8 @@ class _ImportMap:
     """Tracks import aliases for resolving call targets."""
 
     def __init__(self) -> None:
-        self.modules: dict[str, str] = {}
-        self.from_imports: dict[str, tuple[str, str]] = {}
+        self.module_aliases: dict[str, str] = {}
+        self.imported_symbols: dict[str, tuple[str, str]] = {}
 
     def collect_from(self, node: ast.AST) -> None:
         for child in ast.walk(node):
@@ -23,13 +23,13 @@ class _ImportMap:
                 for alias in child.names:
                     local = alias.asname or alias.name.split(".")[0]
                     root = alias.name.split(".")[0]
-                    self.modules[local] = root
+                    self.module_aliases[local] = root
             elif isinstance(child, ast.ImportFrom) and child.module:
                 for alias in child.names:
                     if alias.name == "*":
                         continue
                     local = alias.asname or alias.name
-                    self.from_imports[local] = (child.module.split(".")[0], alias.name)
+                    self.imported_symbols[local] = (child.module.split(".")[0], alias.name)
 
 
 class _AsyncBlockingVisitor(ast.NodeVisitor):
@@ -57,11 +57,11 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
         self._async_depth -= 1
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        nested = self._async_depth > 0
-        if nested:
+        inside_async = self._async_depth > 0
+        if inside_async:
             self._nested_sync_depth += 1
         self.generic_visit(node)
-        if nested:
+        if inside_async:
             self._nested_sync_depth -= 1
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -92,8 +92,8 @@ def _match_call(
         for rule in rules:
             if rule.builtin and func.id == rule.builtin:
                 return rule
-        if func.id in imports.from_imports:
-            module, attr = imports.from_imports[func.id]
+        if func.id in imports.imported_symbols:
+            module, attr = imports.imported_symbols[func.id]
             return _match_module_attr(module, attr, rules)
         return None
 
@@ -109,10 +109,10 @@ def _resolve_attribute(node: ast.Attribute, imports: _ImportMap) -> tuple[str | 
     attr = node.attr
     value = node.value
     if isinstance(value, ast.Name):
-        if value.id in imports.modules:
-            return imports.modules[value.id], attr
-        if value.id in imports.from_imports:
-            module, _ = imports.from_imports[value.id]
+        if value.id in imports.module_aliases:
+            return imports.module_aliases[value.id], attr
+        if value.id in imports.imported_symbols:
+            module, _ = imports.imported_symbols[value.id]
             return module, attr
     return None, None
 
@@ -154,6 +154,7 @@ def analyze_tree(
     *,
     exclude: list[str] | None = None,
     min_severity: Severity = "warning",
+    rule_ids: list[str] | None = None,
 ) -> list[Finding]:
     """Recursively analyze Python files under *root* and return aggregated findings."""
     root_path = Path(root)
@@ -163,7 +164,7 @@ def analyze_tree(
     if root_path.is_file():
         if root_path.suffix == ".py":
             findings.extend(analyze_file(root_path))
-        return _filter_by_severity(findings, min_severity)
+        return _filter_findings(findings, min_severity=min_severity, rule_ids=rule_ids)
 
     for file_path in sorted(root_path.rglob("*.py")):
         relative = str(file_path.relative_to(root_path))
@@ -171,10 +172,19 @@ def analyze_tree(
             continue
         findings.extend(analyze_file(file_path))
 
-    return _filter_by_severity(findings, min_severity)
+    return _filter_findings(findings, min_severity=min_severity, rule_ids=rule_ids)
 
 
-def _filter_by_severity(findings: list[Finding], min_severity: Severity) -> list[Finding]:
-    if min_severity == "warning":
-        return findings
-    return [finding for finding in findings if finding.severity == "error"]
+def _filter_findings(
+    findings: list[Finding],
+    *,
+    min_severity: Severity,
+    rule_ids: list[str] | None,
+) -> list[Finding]:
+    result = findings
+    if min_severity == "error":
+        result = [finding for finding in result if finding.severity == "error"]
+    if rule_ids:
+        allowed = set(rule_ids)
+        result = [finding for finding in result if finding.rule_id in allowed]
+    return result

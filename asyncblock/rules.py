@@ -93,21 +93,19 @@ def _rule_pattern(rule: Rule) -> str:
 
 def list_rules() -> tuple[RuleInfo, ...]:
     """Return built-in rules grouped by ``rule_id`` with matched call patterns."""
-    grouped: dict[str, list[str]] = {}
-    severity: dict[str, Severity] = {}
-    suggestion: dict[str, str] = {}
+    patterns_by_id: dict[str, list[str]] = {}
+    details_by_id: dict[str, tuple[str, Severity]] = {}
 
     for rule in RULES:
-        grouped.setdefault(rule.rule_id, []).append(_rule_pattern(rule))
-        severity[rule.rule_id] = rule.severity
-        suggestion[rule.rule_id] = rule.suggestion
+        patterns_by_id.setdefault(rule.rule_id, []).append(_rule_pattern(rule))
+        details_by_id[rule.rule_id] = (rule.suggestion, rule.severity)
 
     return tuple(
         RuleInfo(
             rule_id=rule_id,
             patterns=tuple(patterns),
-            suggestion=suggestion[rule_id],
-            severity=severity[rule_id],
+            suggestion=details_by_id[rule_id][0],
+            severity=details_by_id[rule_id][1],
         )
-        for rule_id, patterns in grouped.items()
+        for rule_id, patterns in patterns_by_id.items()
     )

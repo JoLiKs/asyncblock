@@ -98,6 +98,20 @@ def test_analyze_tree_severity_filter() -> None:
     assert findings[0].severity == "warning"
 
 
+def test_analyze_tree_rule_filter() -> None:
+    findings = analyze_tree(FIXTURES, rule_ids=["BLOCK_SLEEP"])
+
+    assert findings
+    assert all(finding.rule_id == "BLOCK_SLEEP" for finding in findings)
+    assert not any(finding.rule_id == "BLOCK_HTTP" for finding in findings)
+
+
+def test_analyze_tree_rule_filter_empty_for_unknown_rule() -> None:
+    findings = analyze_tree(FIXTURES, rule_ids=["NONEXISTENT_RULE"])
+
+    assert findings == []
+
+
 def test_finding_to_dict() -> None:
     finding = Finding(
         file="app.py",

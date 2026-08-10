@@ -40,6 +40,9 @@ asyncblock scan . --exclude "tests/*" --exclude "**/migrations/*"
 # Показывать только findings уровня error
 asyncblock scan . --severity error
 
+# Сканировать только определённые правила (можно повторять флаг)
+asyncblock scan . --rule BLOCK_SLEEP --rule BLOCK_HTTP
+
 # Посмотреть встроенные правила детекции
 asyncblock rules
 
@@ -90,6 +93,9 @@ for finding in findings:
     print(f"{finding.location} [{finding.rule_id}] {finding.message}")
 
 all_findings = analyze_tree("./src", exclude=["tests/*"])
+
+# Только findings по выбранным правилам
+db_findings = analyze_tree("./src", rule_ids=["BLOCK_DB"])
 
 for rule in list_rules():
     print(rule.rule_id, rule.patterns)
