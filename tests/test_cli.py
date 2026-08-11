@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from io import StringIO
 from pathlib import Path
 
 from asyncblock.cli import main
@@ -61,3 +62,22 @@ def test_scan_command_include_filter(capsys) -> None:
     payload = json.loads(captured.out)
     assert payload
     assert all(item["file"].endswith("block_sleep.py") for item in payload)
+
+
+def test_scan_command_stdin(capsys, monkeypatch) -> None:
+    source = """import time
+
+async def handler():
+    time.sleep(1)
+"""
+    monkeypatch.setattr("sys.stdin", StringIO(source))
+
+    exit_code = main(["scan", "-", "--json"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+
+    payload = json.loads(captured.out)
+    assert len(payload) == 1
+    assert payload[0]["rule_id"] == "BLOCK_SLEEP"
+    assert payload[0]["file"] == "<stdin>"

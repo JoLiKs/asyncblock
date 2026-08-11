@@ -34,6 +34,9 @@ asyncblock scan ./src
 # JSON-вывод для CI или скриптов
 asyncblock scan ./app --json
 
+# Анализ кода из stdin (удобно в пайплайнах и pre-commit)
+cat handlers.py | asyncblock scan -
+
 # Исключить тесты и миграции
 asyncblock scan . --exclude "tests/*" --exclude "**/migrations/*"
 
@@ -89,11 +92,17 @@ BLOCK_HTTP        requests.get(), requests.post(), …            error     Use 
 ## Использование как библиотеки
 
 ```python
-from asyncblock import analyze_file, analyze_tree, Finding, list_rules
+from asyncblock import analyze_file, analyze_source, analyze_tree, Finding, list_rules
 
 findings: list[Finding] = analyze_file("app/handlers.py")
 for finding in findings:
     print(f"{finding.location} [{finding.rule_id}] {finding.message}")
+
+# Анализ строки с кодом без записи во временный файл
+snippet_findings = analyze_source(
+    "async def f():\n    time.sleep(1)\n",
+    filename="handlers.py",
+)
 
 all_findings = analyze_tree("./src", exclude=["tests/*"])
 

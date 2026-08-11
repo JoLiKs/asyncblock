@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from asyncblock import __version__
-from asyncblock.analyzer import analyze_tree
+from asyncblock.analyzer import analyze_source, analyze_tree, filter_findings
 from asyncblock.models import Finding, RuleInfo, Severity
 from asyncblock.rules import list_rules
 
@@ -37,7 +37,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "path",
         nargs="?",
         default=".",
-        help="File or directory to scan (default: current directory)",
+        help="File or directory to scan, or '-' for stdin (default: current directory)",
     )
     scan.add_argument(
         "--json",
@@ -106,38 +106,40 @@ def _render_table(
         return "\n".join([header, *body])
 
 
-def _format_text(findings: list[Finding]) -> str:
+def _format_findings_table(findings: list[Finding]) -> str:
     if not findings:
         return "No blocking calls found in async contexts."
 
-    columns: list[tuple[str, dict[str, Any]]] = [
-        ("Location", {"style": "cyan", "no_wrap": True}),
-        ("Rule", {"style": "magenta"}),
-        ("Message", {}),
-        ("Suggestion", {"style": "green"}),
-    ]
-    rows = [
-        (finding.location, finding.rule_id, finding.message, finding.suggestion)
-        for finding in findings
-    ]
-    return _render_table(columns, rows)
+    return _render_table(
+        [
+            ("Location", {"style": "cyan", "no_wrap": True}),
+            ("Rule", {"style": "magenta"}),
+            ("Message", {}),
+            ("Suggestion", {"style": "green"}),
+        ],
+        [
+            (finding.location, finding.rule_id, finding.message, finding.suggestion)
+            for finding in findings
+        ],
+    )
 
 
-def _format_rules_text(rules: tuple[RuleInfo, ...]) -> str:
+def _format_rules_table(rules: tuple[RuleInfo, ...]) -> str:
     if not rules:
         return "No built-in rules configured."
 
-    columns: list[tuple[str, dict[str, Any]]] = [
-        ("Rule", {"style": "magenta", "no_wrap": True}),
-        ("Patterns", {}),
-        ("Severity", {}),
-        ("Suggestion", {"style": "green"}),
-    ]
-    rows = [
-        (rule.rule_id, ", ".join(rule.patterns), rule.severity, rule.suggestion)
-        for rule in rules
-    ]
-    return _render_table(columns, rows)
+    return _render_table(
+        [
+            ("Rule", {"style": "magenta", "no_wrap": True}),
+            ("Patterns", {}),
+            ("Severity", {}),
+            ("Suggestion", {"style": "green"}),
+        ],
+        [
+            (rule.rule_id, ", ".join(rule.patterns), rule.severity, rule.suggestion)
+            for rule in rules
+        ],
+    )
 
 
 def _run_rules(args: argparse.Namespace) -> int:
@@ -146,30 +148,46 @@ def _run_rules(args: argparse.Namespace) -> int:
     if args.json:
         _print_json(list(rules))
     else:
-        print(_format_rules_text(rules))
+        print(_format_rules_table(rules))
 
     return 0
 
 
-def _run_scan(args: argparse.Namespace) -> int:
-    path = Path(args.path)
-    if not path.exists():
-        print(f"Error: path does not exist: {path}", file=sys.stderr)
-        return 2
+def _scan_stdin(
+    *,
+    min_severity: Severity,
+    rule_ids: list[str] | None,
+) -> list[Finding]:
+    """Read Python source from stdin and return filtered findings."""
+    source = sys.stdin.read()
+    findings = analyze_source(source, filename="<stdin>")
+    return filter_findings(findings, min_severity=min_severity, rule_ids=rule_ids)
 
+
+def _run_scan(args: argparse.Namespace) -> int:
     rule_ids = args.rule or None
-    findings = analyze_tree(
-        path,
-        exclude=args.exclude,
-        include=args.include,
-        min_severity=cast(Severity, args.severity),
-        rule_ids=rule_ids,
-    )
+    min_severity = cast(Severity, args.severity)
+
+    if args.path == "-":
+        findings = _scan_stdin(min_severity=min_severity, rule_ids=rule_ids)
+    else:
+        path = Path(args.path)
+        if not path.exists():
+            print(f"Error: path does not exist: {path}", file=sys.stderr)
+            return 2
+
+        findings = analyze_tree(
+            path,
+            exclude=args.exclude,
+            include=args.include,
+            min_severity=min_severity,
+            rule_ids=rule_ids,
+        )
 
     if args.json:
         _print_json(findings)
     else:
-        print(_format_text(findings))
+        print(_format_findings_table(findings))
 
     has_errors = any(finding.severity == "error" for finding in findings)
     return 1 if has_errors else 0

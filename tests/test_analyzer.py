@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from asyncblock.analyzer import analyze_file, analyze_tree
+from asyncblock.analyzer import analyze_file, analyze_source, analyze_tree
 from asyncblock.models import Finding
 from asyncblock.rules import Rule
 
@@ -129,6 +129,36 @@ def test_analyze_tree_rule_filter() -> None:
 
 def test_analyze_tree_rule_filter_empty_for_unknown_rule() -> None:
     findings = analyze_tree(FIXTURES, rule_ids=["NONEXISTENT_RULE"])
+
+    assert findings == []
+
+
+def test_analyze_source_detects_blocking_call() -> None:
+    source = """import time
+
+async def handler():
+    time.sleep(1)
+"""
+    findings = analyze_source(source)
+
+    assert len(findings) == 1
+    assert findings[0].rule_id == "BLOCK_SLEEP"
+    assert findings[0].file == "<string>"
+    assert findings[0].line == 4
+
+
+def test_analyze_source_custom_filename() -> None:
+    source = """async def handler():
+    open("x")
+"""
+    findings = analyze_source(source, filename="handlers.py")
+
+    assert len(findings) == 1
+    assert findings[0].file == "handlers.py"
+
+
+def test_analyze_source_invalid_syntax_returns_empty() -> None:
+    findings = analyze_source("async def oops(:")
 
     assert findings == []
 

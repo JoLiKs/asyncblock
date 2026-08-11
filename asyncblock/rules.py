@@ -96,18 +96,18 @@ RULES: tuple[Rule, ...] = (
 def list_rules() -> tuple[RuleInfo, ...]:
     """Return built-in rules grouped by ``rule_id`` with matched call patterns."""
     patterns_by_id: dict[str, list[str]] = defaultdict(list)
-    representative: dict[str, Rule] = {}
+    rule_by_id: dict[str, Rule] = {}
 
     for rule in RULES:
         patterns_by_id[rule.rule_id].append(rule.pattern)
-        representative[rule.rule_id] = rule
+        rule_by_id[rule.rule_id] = rule
 
     return tuple(
         RuleInfo(
             rule_id=rule_id,
             patterns=tuple(patterns_by_id[rule_id]),
-            suggestion=representative[rule_id].suggestion,
-            severity=representative[rule_id].severity,
+            suggestion=rule_by_id[rule_id].suggestion,
+            severity=rule_by_id[rule_id].severity,
         )
         for rule_id in patterns_by_id
     )
