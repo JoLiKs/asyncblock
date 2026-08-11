@@ -6,12 +6,21 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from asyncblock import __version__
 from asyncblock.analyzer import analyze_tree
 from asyncblock.models import Finding, RuleInfo, Severity
 from asyncblock.rules import list_rules
+
+
+class _JsonSerializable(Protocol):
+    def to_dict(self) -> dict[str, object]: ...
+
+
+def _print_json(items: list[_JsonSerializable]) -> None:
+    payload = [item.to_dict() for item in items]
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -41,6 +50,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="GLOB",
         help="Exclude paths matching a glob pattern (repeatable)",
+    )
+    scan.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="Include only paths matching a glob pattern (repeatable)",
     )
     scan.add_argument(
         "--severity",
@@ -128,8 +144,7 @@ def _run_rules(args: argparse.Namespace) -> int:
     rules = list_rules()
 
     if args.json:
-        payload = [rule.to_dict() for rule in rules]
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        _print_json(list(rules))
     else:
         print(_format_rules_text(rules))
 
@@ -146,13 +161,13 @@ def _run_scan(args: argparse.Namespace) -> int:
     findings = analyze_tree(
         path,
         exclude=args.exclude,
+        include=args.include,
         min_severity=cast(Severity, args.severity),
         rule_ids=rule_ids,
     )
 
     if args.json:
-        payload = [finding.to_dict() for finding in findings]
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        _print_json(findings)
     else:
         print(_format_text(findings))
 

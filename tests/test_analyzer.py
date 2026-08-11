@@ -82,6 +82,27 @@ def test_analyze_tree_excludes_glob_pattern() -> None:
     assert all("block_" not in Path(f).name for f in files)
 
 
+def test_analyze_tree_include_glob_pattern() -> None:
+    findings = analyze_tree(FIXTURES, include=["block_sleep.py"])
+
+    assert findings
+    assert all(Path(finding.file).name == "block_sleep.py" for finding in findings)
+    assert all(finding.rule_id == "BLOCK_SLEEP" for finding in findings)
+
+
+def test_analyze_tree_include_multiple_patterns() -> None:
+    findings = analyze_tree(FIXTURES, include=["block_sleep.py", "block_http.py"])
+
+    files = {Path(finding.file).name for finding in findings}
+    assert files == {"block_sleep.py", "block_http.py"}
+
+
+def test_analyze_tree_include_empty_when_no_match() -> None:
+    findings = analyze_tree(FIXTURES, include=["nonexistent/*.py"])
+
+    assert findings == []
+
+
 def test_analyze_tree_severity_filter() -> None:
     custom_rules = (
         Rule(

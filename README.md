@@ -37,6 +37,9 @@ asyncblock scan ./app --json
 # Исключить тесты и миграции
 asyncblock scan . --exclude "tests/*" --exclude "**/migrations/*"
 
+# Сканировать только исходники приложения
+asyncblock scan . --include "src/**/*.py" --include "app/**/*.py"
+
 # Показывать только findings уровня error
 asyncblock scan . --severity error
 
@@ -93,6 +96,9 @@ for finding in findings:
     print(f"{finding.location} [{finding.rule_id}] {finding.message}")
 
 all_findings = analyze_tree("./src", exclude=["tests/*"])
+
+# Только файлы, попадающие под glob-паттерны
+src_findings = analyze_tree("./", include=["src/**/*.py"])
 
 # Только findings по выбранным правилам
 db_findings = analyze_tree("./src", rule_ids=["BLOCK_DB"])

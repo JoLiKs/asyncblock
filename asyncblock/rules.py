@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 
 from asyncblock.models import RuleInfo, Severity
@@ -18,6 +19,13 @@ class Rule:
     module: str | None = None
     attr: str | None = None
     builtin: str | None = None
+
+    @property
+    def pattern(self) -> str:
+        """Human-readable call pattern shown in rule listings."""
+        if self.builtin:
+            return f"{self.builtin}()"
+        return f"{self.module}.{self.attr}()"
 
 
 def _module_attr_rule(
@@ -85,27 +93,21 @@ RULES: tuple[Rule, ...] = (
 )
 
 
-def _rule_pattern(rule: Rule) -> str:
-    if rule.builtin:
-        return f"{rule.builtin}()"
-    return f"{rule.module}.{rule.attr}()"
-
-
 def list_rules() -> tuple[RuleInfo, ...]:
     """Return built-in rules grouped by ``rule_id`` with matched call patterns."""
-    patterns_by_id: dict[str, list[str]] = {}
-    details_by_id: dict[str, tuple[str, Severity]] = {}
+    patterns_by_id: dict[str, list[str]] = defaultdict(list)
+    representative: dict[str, Rule] = {}
 
     for rule in RULES:
-        patterns_by_id.setdefault(rule.rule_id, []).append(_rule_pattern(rule))
-        details_by_id[rule.rule_id] = (rule.suggestion, rule.severity)
+        patterns_by_id[rule.rule_id].append(rule.pattern)
+        representative[rule.rule_id] = rule
 
     return tuple(
         RuleInfo(
             rule_id=rule_id,
-            patterns=tuple(patterns),
-            suggestion=details_by_id[rule_id][0],
-            severity=details_by_id[rule_id][1],
+            patterns=tuple(patterns_by_id[rule_id]),
+            suggestion=representative[rule_id].suggestion,
+            severity=representative[rule_id].severity,
         )
-        for rule_id, patterns in patterns_by_id.items()
+        for rule_id in patterns_by_id
     )

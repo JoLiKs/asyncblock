@@ -10,6 +10,11 @@ from asyncblock.models import Finding, Severity
 from asyncblock.rules import RULES, Rule
 
 
+def _module_root(qualified_name: str) -> str:
+    """Return the top-level package from a dotted import path."""
+    return qualified_name.split(".", maxsplit=1)[0]
+
+
 class _ImportMap:
     """Tracks import aliases for resolving call targets."""
 
@@ -21,15 +26,15 @@ class _ImportMap:
         for child in ast.walk(node):
             if isinstance(child, ast.Import):
                 for alias in child.names:
-                    local = alias.asname or alias.name.split(".")[0]
-                    root = alias.name.split(".")[0]
-                    self.module_aliases[local] = root
+                    local = alias.asname or _module_root(alias.name)
+                    self.module_aliases[local] = _module_root(alias.name)
             elif isinstance(child, ast.ImportFrom) and child.module:
+                module = _module_root(child.module)
                 for alias in child.names:
                     if alias.name == "*":
                         continue
                     local = alias.asname or alias.name
-                    self.imported_symbols[local] = (child.module.split(".")[0], alias.name)
+                    self.imported_symbols[local] = (module, alias.name)
 
 
 class _AsyncBlockingVisitor(ast.NodeVisitor):
@@ -41,7 +46,7 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
         self.findings: list[Finding] = []
         self.imports = _ImportMap()
         self._async_depth = 0
-        self._nested_sync_depth = 0
+        self._inner_sync_depth = 0
 
     def visit_Module(self, node: ast.Module) -> None:
         self.imports.collect_from(node)
@@ -49,7 +54,7 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
 
     @property
     def _in_async_context(self) -> bool:
-        return self._async_depth > 0 or self._nested_sync_depth > 0
+        return self._async_depth > 0 or self._inner_sync_depth > 0
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._async_depth += 1
@@ -59,10 +64,10 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         inside_async = self._async_depth > 0
         if inside_async:
-            self._nested_sync_depth += 1
+            self._inner_sync_depth += 1
         self.generic_visit(node)
         if inside_async:
-            self._nested_sync_depth -= 1
+            self._inner_sync_depth -= 1
 
     def visit_Call(self, node: ast.Call) -> None:
         if self._in_async_context:
@@ -149,28 +154,42 @@ def _should_exclude(relative_path: str, exclude_patterns: list[str]) -> bool:
     return any(fnmatch.fnmatch(normalized, pattern) for pattern in exclude_patterns)
 
 
+def _should_include(relative_path: str, include_patterns: list[str]) -> bool:
+    if not include_patterns:
+        return True
+    normalized = relative_path.replace("\\", "/")
+    return any(fnmatch.fnmatch(normalized, pattern) for pattern in include_patterns)
+
+
 def analyze_tree(
     root: str | Path,
     *,
     exclude: list[str] | None = None,
+    include: list[str] | None = None,
     min_severity: Severity = "warning",
     rule_ids: list[str] | None = None,
 ) -> list[Finding]:
     """Recursively analyze Python files under *root* and return aggregated findings."""
     root_path = Path(root)
     exclude_patterns = exclude or []
+    include_patterns = include or []
     findings: list[Finding] = []
 
     if root_path.is_file():
         if root_path.suffix == ".py":
-            findings.extend(analyze_file(root_path))
-        return _filter_findings(findings, min_severity=min_severity, rule_ids=rule_ids)
-
-    for file_path in sorted(root_path.rglob("*.py")):
-        relative = str(file_path.relative_to(root_path))
-        if _should_exclude(relative, exclude_patterns):
-            continue
-        findings.extend(analyze_file(file_path))
+            relative = root_path.name
+            if _should_include(relative, include_patterns) and not _should_exclude(
+                relative, exclude_patterns
+            ):
+                findings.extend(analyze_file(root_path))
+    else:
+        for file_path in sorted(root_path.rglob("*.py")):
+            relative = str(file_path.relative_to(root_path))
+            if _should_exclude(relative, exclude_patterns):
+                continue
+            if not _should_include(relative, include_patterns):
+                continue
+            findings.extend(analyze_file(file_path))
 
     return _filter_findings(findings, min_severity=min_severity, rule_ids=rule_ids)
 
@@ -181,10 +200,10 @@ def _filter_findings(
     min_severity: Severity,
     rule_ids: list[str] | None,
 ) -> list[Finding]:
-    result = findings
-    if min_severity == "error":
-        result = [finding for finding in result if finding.severity == "error"]
-    if rule_ids:
-        allowed = set(rule_ids)
-        result = [finding for finding in result if finding.rule_id in allowed]
-    return result
+    allowed_rule_ids = set(rule_ids) if rule_ids else None
+    return [
+        finding
+        for finding in findings
+        if (min_severity != "error" or finding.severity == "error")
+        and (allowed_rule_ids is None or finding.rule_id in allowed_rule_ids)
+    ]

@@ -50,3 +50,14 @@ def test_scan_command_rule_filter(capsys) -> None:
     assert payload
     assert all(item["rule_id"] == "BLOCK_SLEEP" for item in payload)
     assert not any(item["rule_id"] == "BLOCK_HTTP" for item in payload)
+
+
+def test_scan_command_include_filter(capsys) -> None:
+    exit_code = main(["scan", str(FIXTURES), "--include", "block_sleep.py", "--json"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+
+    payload = json.loads(captured.out)
+    assert payload
+    assert all(item["file"].endswith("block_sleep.py") for item in payload)
