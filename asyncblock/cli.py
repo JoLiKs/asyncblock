@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from asyncblock import __version__
-from asyncblock.analyzer import analyze_source, analyze_tree, filter_findings
-from asyncblock.models import Finding, RuleInfo, Severity
+from asyncblock.analyzer import analyze_source, analyze_tree, filter_findings, summarize_findings
+from asyncblock.models import Finding, RuleInfo, ScanSummary, Severity
 from asyncblock.rules import list_rules
 
 
@@ -71,6 +71,11 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="RULE_ID",
         help="Report only findings for these rule IDs (repeatable, see `asyncblock rules`)",
     )
+    scan.add_argument(
+        "--summary",
+        action="store_true",
+        help="Print a short summary of findings (counts by rule and severity)",
+    )
 
     rules = subparsers.add_parser("rules", help="List built-in detection rules")
     rules.add_argument(
@@ -79,6 +84,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Output rules as JSON",
     )
     return parser
+
+
+def _format_table(
+    empty_message: str,
+    columns: list[tuple[str, dict[str, Any]]],
+    rows: list[tuple[str, ...]],
+) -> str:
+    if not rows:
+        return empty_message
+    return _render_table(columns, rows)
 
 
 def _render_table(
@@ -107,10 +122,8 @@ def _render_table(
 
 
 def _format_findings_table(findings: list[Finding]) -> str:
-    if not findings:
-        return "No blocking calls found in async contexts."
-
-    return _render_table(
+    return _format_table(
+        "No blocking calls found in async contexts.",
         [
             ("Location", {"style": "cyan", "no_wrap": True}),
             ("Rule", {"style": "magenta"}),
@@ -124,11 +137,26 @@ def _format_findings_table(findings: list[Finding]) -> str:
     )
 
 
-def _format_rules_table(rules: tuple[RuleInfo, ...]) -> str:
-    if not rules:
-        return "No built-in rules configured."
+def _format_summary(summary: ScanSummary) -> str:
+    if summary.total == 0:
+        return "Summary: no blocking calls found."
 
-    return _render_table(
+    parts = [f"{summary.total} finding{'s' if summary.total != 1 else ''}"]
+    parts.append(f"in {summary.files} file{'s' if summary.files != 1 else ''}")
+    severity_parts: list[str] = []
+    if summary.errors:
+        severity_parts.append(f"{summary.errors} error{'s' if summary.errors != 1 else ''}")
+    if summary.warnings:
+        severity_parts.append(f"{summary.warnings} warning{'s' if summary.warnings != 1 else ''}")
+    lines = [f"Summary: {', '.join(parts)} ({', '.join(severity_parts)})"]
+    for rule_id, count in summary.by_rule:
+        lines.append(f"  {rule_id}: {count}")
+    return "\n".join(lines)
+
+
+def _format_rules_table(rules: tuple[RuleInfo, ...]) -> str:
+    return _format_table(
+        "No built-in rules configured.",
         [
             ("Rule", {"style": "magenta", "no_wrap": True}),
             ("Patterns", {}),
@@ -186,8 +214,17 @@ def _run_scan(args: argparse.Namespace) -> int:
 
     if args.json:
         _print_json(findings)
+        if args.summary:
+            summary_json = json.dumps(
+                summarize_findings(findings).to_dict(),
+                ensure_ascii=False,
+            )
+            print(summary_json, file=sys.stderr)
     else:
         print(_format_findings_table(findings))
+        if args.summary:
+            print()
+            print(_format_summary(summarize_findings(findings)))
 
     has_errors = any(finding.severity == "error" for finding in findings)
     return 1 if has_errors else 0

@@ -81,3 +81,37 @@ async def handler():
     assert len(payload) == 1
     assert payload[0]["rule_id"] == "BLOCK_SLEEP"
     assert payload[0]["file"] == "<stdin>"
+
+
+def test_scan_command_summary_text_output(capsys) -> None:
+    exit_code = main(["scan", str(FIXTURES), "--summary"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "Summary:" in captured.out
+    assert "BLOCK_SLEEP" in captured.out
+    assert captured.err == ""
+
+
+def test_scan_command_summary_json_output_on_stderr(capsys) -> None:
+    exit_code = main(["scan", str(FIXTURES), "--json", "--summary"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+
+    findings = json.loads(captured.out)
+    assert isinstance(findings, list)
+    assert findings
+
+    summary = json.loads(captured.err.strip())
+    assert summary["total"] == len(findings)
+    assert summary["files"] >= 1
+    assert isinstance(summary["by_rule"], dict)
+
+
+def test_scan_command_summary_empty_scan(capsys) -> None:
+    exit_code = main(["scan", str(FIXTURES / "async_sleep_ok.py"), "--summary"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "no blocking calls found" in captured.out.lower()

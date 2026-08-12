@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import ast
 import fnmatch
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
-from asyncblock.models import Finding, Severity
+from asyncblock.models import Finding, ScanSummary, Severity, meets_min_severity
 from asyncblock.rules import RULES, Rule
 
 
@@ -40,8 +42,8 @@ class _ImportMap:
 class _AsyncBlockingVisitor(ast.NodeVisitor):
     """Walks AST and collects blocking calls inside async contexts."""
 
-    def __init__(self, source_path: str, rules: tuple[Rule, ...]) -> None:
-        self.source_path = source_path
+    def __init__(self, filename: str, rules: tuple[Rule, ...]) -> None:
+        self.filename = filename
         self.rules = rules
         self.findings: list[Finding] = []
         self.imports = _ImportMap()
@@ -56,24 +58,38 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
     def _in_async_context(self) -> bool:
         return self._async_depth > 0 or self._nested_sync_depth > 0
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+    @contextmanager
+    def _async_scope(self) -> Iterator[None]:
         self._async_depth += 1
-        self.generic_visit(node)
-        self._async_depth -= 1
+        try:
+            yield
+        finally:
+            self._async_depth -= 1
+
+    @contextmanager
+    def _nested_sync_scope(self) -> Iterator[None]:
+        self._nested_sync_depth += 1
+        try:
+            yield
+        finally:
+            self._nested_sync_depth -= 1
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        with self._async_scope():
+            self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        inside_async = self._async_depth > 0
-        if inside_async:
-            self._nested_sync_depth += 1
-        self.generic_visit(node)
-        if inside_async:
-            self._nested_sync_depth -= 1
+        if self._async_depth > 0:
+            with self._nested_sync_scope():
+                self.generic_visit(node)
+        else:
+            self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
         if self._in_async_context:
             rule = _match_call(node.func, self.imports, self.rules)
             if rule is not None:
-                self.findings.append(_finding_from_call(node, rule, self.source_path))
+                self.findings.append(_make_finding(node, rule, self.filename))
         self.generic_visit(node)
 
 
@@ -119,10 +135,10 @@ def _match_module_attr(module: str, attr: str, rules: tuple[Rule, ...]) -> Rule 
     return None
 
 
-def _finding_from_call(node: ast.Call, rule: Rule, source_path: str) -> Finding:
+def _make_finding(node: ast.Call, rule: Rule, filename: str) -> Finding:
     """Build a finding record for a matched blocking call."""
     return Finding(
-        file=source_path,
+        file=filename,
         line=node.lineno,
         col=node.col_offset + 1,
         rule_id=rule.rule_id,
@@ -196,6 +212,33 @@ def _iter_python_files(root_path: Path) -> list[tuple[Path, str]]:
     ]
 
 
+def summarize_findings(findings: list[Finding]) -> ScanSummary:
+    """Aggregate finding counts by file and rule."""
+    by_rule: dict[str, int] = {}
+    files: set[str] = set()
+    errors = 0
+    warnings = 0
+
+    for finding in findings:
+        files.add(finding.file)
+        by_rule[finding.rule_id] = by_rule.get(finding.rule_id, 0) + 1
+        if finding.severity == "error":
+            errors += 1
+        else:
+            warnings += 1
+
+    ranked_rules = tuple(
+        sorted(by_rule.items(), key=lambda item: (-item[1], item[0])),
+    )
+    return ScanSummary(
+        total=len(findings),
+        files=len(files),
+        errors=errors,
+        warnings=warnings,
+        by_rule=ranked_rules,
+    )
+
+
 def filter_findings(
     findings: list[Finding],
     *,
@@ -203,7 +246,13 @@ def filter_findings(
     rule_ids: list[str] | None = None,
 ) -> list[Finding]:
     """Return findings that meet the minimum severity and optional rule filter."""
-    return _filter_findings(findings, min_severity=min_severity, rule_ids=rule_ids)
+    allowed_rule_ids = set(rule_ids) if rule_ids else None
+    return [
+        finding
+        for finding in findings
+        if meets_min_severity(finding.severity, min_severity)
+        and (allowed_rule_ids is None or finding.rule_id in allowed_rule_ids)
+    ]
 
 
 def analyze_tree(
@@ -229,26 +278,4 @@ def analyze_tree(
             continue
         findings.extend(analyze_file(file_path))
 
-    return _filter_findings(findings, min_severity=min_severity, rule_ids=rule_ids)
-
-
-_SEVERITY_RANK: dict[Severity, int] = {"warning": 0, "error": 1}
-
-
-def _meets_min_severity(severity: Severity, min_severity: Severity) -> bool:
-    return _SEVERITY_RANK[severity] >= _SEVERITY_RANK[min_severity]
-
-
-def _filter_findings(
-    findings: list[Finding],
-    *,
-    min_severity: Severity,
-    rule_ids: list[str] | None,
-) -> list[Finding]:
-    allowed_rule_ids = set(rule_ids) if rule_ids else None
-    return [
-        finding
-        for finding in findings
-        if _meets_min_severity(finding.severity, min_severity)
-        and (allowed_rule_ids is None or finding.rule_id in allowed_rule_ids)
-    ]
+    return filter_findings(findings, min_severity=min_severity, rule_ids=rule_ids)

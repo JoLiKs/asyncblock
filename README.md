@@ -52,6 +52,9 @@ asyncblock scan . --rule BLOCK_SLEEP --rule BLOCK_HTTP
 # Посмотреть встроенные правила детекции
 asyncblock rules
 
+# Сканировать с краткой сводкой по правилам и severity
+asyncblock scan . --summary
+
 # JSON-каталог правил для документации или CI
 asyncblock rules --json
 ```
@@ -65,6 +68,8 @@ app/db.py:18                      BLOCK_DB         Blocking sqlite3.connect() in
 ```
 
 Код выхода: `0` — проблем не найдено (или только warning), `1` — есть findings уровня **error**.
+
+С флагом `--summary` после таблицы выводится краткая сводка: число findings, затронутых файлов, разбивка по severity и по правилам. В режиме `--json` сводка печатается в stderr одной JSON-строкой, чтобы stdout оставался массивом findings.
 
 ### Команда `rules`
 
@@ -92,11 +97,13 @@ BLOCK_HTTP        requests.get(), requests.post(), …            error     Use 
 ## Использование как библиотеки
 
 ```python
-from asyncblock import analyze_file, analyze_source, analyze_tree, Finding, list_rules
+from asyncblock import analyze_file, analyze_source, analyze_tree, Finding, list_rules, summarize_findings
 
 findings: list[Finding] = analyze_file("app/handlers.py")
-for finding in findings:
-    print(f"{finding.location} [{finding.rule_id}] {finding.message}")
+summary = summarize_findings(findings)
+print(f"{summary.total} issues in {summary.files} files")
+for rule_id, count in summary.by_rule:
+    print(f"  {rule_id}: {count}")
 
 # Анализ строки с кодом без записи во временный файл
 snippet_findings = analyze_source(
