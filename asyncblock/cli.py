@@ -86,21 +86,21 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _format_table(
-    empty_message: str,
-    columns: list[tuple[str, dict[str, Any]]],
-    rows: list[tuple[str, ...]],
-) -> str:
-    if not rows:
-        return empty_message
-    return _render_table(columns, rows)
+def _pluralize(count: int, singular: str) -> str:
+    suffix = "" if count == 1 else "s"
+    return f"{count} {singular}{suffix}"
 
 
 def _render_table(
     columns: list[tuple[str, dict[str, Any]]],
     rows: list[tuple[str, ...]],
+    *,
+    empty_message: str,
 ) -> str:
     """Render a table with rich when available, otherwise tab-separated text."""
+    if not rows:
+        return empty_message
+
     try:
         from rich.console import Console
         from rich.table import Table
@@ -122,8 +122,7 @@ def _render_table(
 
 
 def _format_findings_table(findings: list[Finding]) -> str:
-    return _format_table(
-        "No blocking calls found in async contexts.",
+    return _render_table(
         [
             ("Location", {"style": "cyan", "no_wrap": True}),
             ("Rule", {"style": "magenta"}),
@@ -134,6 +133,7 @@ def _format_findings_table(findings: list[Finding]) -> str:
             (finding.location, finding.rule_id, finding.message, finding.suggestion)
             for finding in findings
         ],
+        empty_message="No blocking calls found in async contexts.",
     )
 
 
@@ -141,13 +141,12 @@ def _format_summary(summary: ScanSummary) -> str:
     if summary.total == 0:
         return "Summary: no blocking calls found."
 
-    parts = [f"{summary.total} finding{'s' if summary.total != 1 else ''}"]
-    parts.append(f"in {summary.files} file{'s' if summary.files != 1 else ''}")
+    parts = [_pluralize(summary.total, "finding"), f"in {_pluralize(summary.files, 'file')}"]
     severity_parts: list[str] = []
     if summary.errors:
-        severity_parts.append(f"{summary.errors} error{'s' if summary.errors != 1 else ''}")
+        severity_parts.append(_pluralize(summary.errors, "error"))
     if summary.warnings:
-        severity_parts.append(f"{summary.warnings} warning{'s' if summary.warnings != 1 else ''}")
+        severity_parts.append(_pluralize(summary.warnings, "warning"))
     lines = [f"Summary: {', '.join(parts)} ({', '.join(severity_parts)})"]
     for rule_id, count in summary.by_rule:
         lines.append(f"  {rule_id}: {count}")
@@ -155,8 +154,7 @@ def _format_summary(summary: ScanSummary) -> str:
 
 
 def _format_rules_table(rules: tuple[RuleInfo, ...]) -> str:
-    return _format_table(
-        "No built-in rules configured.",
+    return _render_table(
         [
             ("Rule", {"style": "magenta", "no_wrap": True}),
             ("Patterns", {}),
@@ -167,6 +165,7 @@ def _format_rules_table(rules: tuple[RuleInfo, ...]) -> str:
             (rule.rule_id, ", ".join(rule.patterns), rule.severity, rule.suggestion)
             for rule in rules
         ],
+        empty_message="No built-in rules configured.",
     )
 
 
@@ -212,19 +211,18 @@ def _run_scan(args: argparse.Namespace) -> int:
             rule_ids=rule_ids,
         )
 
+    summary = summarize_findings(findings) if args.summary else None
+
     if args.json:
         _print_json(findings)
-        if args.summary:
-            summary_json = json.dumps(
-                summarize_findings(findings).to_dict(),
-                ensure_ascii=False,
-            )
+        if summary is not None:
+            summary_json = json.dumps(summary.to_dict(), ensure_ascii=False)
             print(summary_json, file=sys.stderr)
     else:
         print(_format_findings_table(findings))
-        if args.summary:
+        if summary is not None:
             print()
-            print(_format_summary(summarize_findings(findings)))
+            print(_format_summary(summary))
 
     has_errors = any(finding.severity == "error" for finding in findings)
     return 1 if has_errors else 0

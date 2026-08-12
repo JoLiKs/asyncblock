@@ -94,6 +94,26 @@ BLOCK_HTTP        requests.get(), requests.post(), …            error     Use 
 
 Правила срабатывают **только** если вызов находится внутри `async def`, включая вложенные синхронные функции, объявленные внутри async-функции.
 
+## Подавление срабатываний
+
+Иногда блокирующий вызов оправдан (legacy-обёртка, тестовый код, осознанный компромисс). Подавите предупреждение inline-комментарием:
+
+```python
+async def handler():
+    time.sleep(0.1)  # asyncblock: ignore
+
+    # asyncblock: ignore-next-line
+    subprocess.run(["echo", "ok"])
+
+    open("cache.txt")  # asyncblock: ignore BLOCK_FILE
+```
+
+- `# asyncblock: ignore` — игнорировать все правила на этой строке
+- `# asyncblock: ignore-next-line` — игнорировать все правила на следующей строке
+- `# asyncblock: ignore BLOCK_SLEEP` — игнорировать только указанные rule ID (можно перечислить несколько)
+
+Директива работает и при анализе через CLI, и при вызове `analyze_file()` / `analyze_source()` из Python.
+
 ## Использование как библиотеки
 
 ```python

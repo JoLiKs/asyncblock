@@ -4,17 +4,86 @@ from __future__ import annotations
 
 import ast
 import fnmatch
+import re
+import tokenize
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass, field
+from io import StringIO
 from pathlib import Path
 
 from asyncblock.models import Finding, ScanSummary, Severity, meets_min_severity
 from asyncblock.rules import RULES, Rule
 
 
-def _module_root(qualified_name: str) -> str:
+def _top_level_module_name(qualified_name: str) -> str:
     """Return the top-level package from a dotted import path."""
     return qualified_name.split(".", maxsplit=1)[0]
+
+
+_IGNORE_DIRECTIVE_RE = re.compile(
+    r"asyncblock:\s*ignore(?:-next-line)?(?:\s+([A-Z][A-Z0-9_]*(?:\s+[A-Z][A-Z0-9_]*)*))?",
+    re.IGNORECASE,
+)
+
+
+@dataclass
+class _LineSuppression:
+    """Rules suppressed on a specific source line."""
+
+    all_rules: bool = False
+    rule_ids: set[str] = field(default_factory=set)
+
+
+def _parse_suppressions(source: str) -> dict[int, _LineSuppression]:
+    """Parse ``# asyncblock: ignore`` directives from source comments."""
+    suppressions: dict[int, _LineSuppression] = {}
+
+    try:
+        tokens = tokenize.generate_tokens(StringIO(source).readline)
+    except tokenize.TokenError:
+        return suppressions
+
+    for token in tokens:
+        if token.type != tokenize.COMMENT:
+            continue
+
+        match = _IGNORE_DIRECTIVE_RE.search(token.string)
+        if match is None:
+            continue
+
+        target_line = token.start[0] + 1 if "ignore-next-line" in token.string else token.start[0]
+        rule_ids = match.group(1).split() if match.group(1) else ()
+        suppression = suppressions.setdefault(target_line, _LineSuppression())
+
+        if not rule_ids:
+            suppression.all_rules = True
+            continue
+
+        suppression.rule_ids.update(rule_ids)
+
+    return suppressions
+
+
+def _apply_suppressions(
+    findings: list[Finding],
+    suppressions: dict[int, _LineSuppression],
+) -> list[Finding]:
+    """Drop findings suppressed by inline ``asyncblock: ignore`` comments."""
+    if not suppressions:
+        return findings
+
+    filtered: list[Finding] = []
+    for finding in findings:
+        suppression = suppressions.get(finding.line)
+        if suppression is None:
+            filtered.append(finding)
+            continue
+        if suppression.all_rules or finding.rule_id in suppression.rule_ids:
+            continue
+        filtered.append(finding)
+    return filtered
 
 
 class _ImportMap:
@@ -28,10 +97,10 @@ class _ImportMap:
         for child in ast.walk(node):
             if isinstance(child, ast.Import):
                 for alias in child.names:
-                    local = alias.asname or _module_root(alias.name)
-                    self.module_aliases[local] = _module_root(alias.name)
+                    local = alias.asname or _top_level_module_name(alias.name)
+                    self.module_aliases[local] = _top_level_module_name(alias.name)
             elif isinstance(child, ast.ImportFrom) and child.module:
-                module = _module_root(child.module)
+                module = _top_level_module_name(child.module)
                 for alias in child.names:
                     if alias.name == "*":
                         continue
@@ -93,6 +162,22 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+def _resolve_call_target(
+    func: ast.expr,
+    imports: _ImportMap,
+) -> tuple[str | None, str | None]:
+    """Resolve a call expression to ``(module, attr)``, when possible."""
+    if isinstance(func, ast.Name):
+        if func.id in imports.imported_symbols:
+            return imports.imported_symbols[func.id]
+        return None, None
+
+    if isinstance(func, ast.Attribute):
+        return _resolve_attribute(func, imports)
+
+    return None, None
+
+
 def _match_call(
     func: ast.expr,
     imports: _ImportMap,
@@ -103,15 +188,10 @@ def _match_call(
         for rule in rules:
             if rule.builtin and func.id == rule.builtin:
                 return rule
-        if func.id in imports.imported_symbols:
-            module, attr = imports.imported_symbols[func.id]
-            return _match_module_attr(module, attr, rules)
-        return None
 
-    if isinstance(func, ast.Attribute):
-        module, attr = _resolve_attribute(func, imports)
-        if module is not None and attr is not None:
-            return _match_module_attr(module, attr, rules)
+    module, attr = _resolve_call_target(func, imports)
+    if module is not None and attr is not None:
+        return _match_module_attr(module, attr, rules)
     return None
 
 
@@ -164,7 +244,7 @@ def analyze_source(
 
     visitor = _AsyncBlockingVisitor(filename, active_rules)
     visitor.visit(tree)
-    return visitor.findings
+    return _apply_suppressions(visitor.findings, _parse_suppressions(source))
 
 
 def analyze_file(path: str | Path, rules: tuple[Rule, ...] | None = None) -> list[Finding]:
@@ -214,18 +294,10 @@ def _iter_python_files(root_path: Path) -> list[tuple[Path, str]]:
 
 def summarize_findings(findings: list[Finding]) -> ScanSummary:
     """Aggregate finding counts by file and rule."""
-    by_rule: dict[str, int] = {}
-    files: set[str] = set()
-    errors = 0
-    warnings = 0
-
-    for finding in findings:
-        files.add(finding.file)
-        by_rule[finding.rule_id] = by_rule.get(finding.rule_id, 0) + 1
-        if finding.severity == "error":
-            errors += 1
-        else:
-            warnings += 1
+    files = {finding.file for finding in findings}
+    by_rule = Counter(finding.rule_id for finding in findings)
+    errors = sum(1 for finding in findings if finding.severity == "error")
+    warnings = len(findings) - errors
 
     ranked_rules = tuple(
         sorted(by_rule.items(), key=lambda item: (-item[1], item[0])),

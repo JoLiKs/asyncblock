@@ -22,6 +22,36 @@ def test_detects_time_sleep_in_async() -> None:
     assert findings[0].line == 5
 
 
+def test_inline_ignore_same_line() -> None:
+    findings = analyze_file(_fixture("ignore_same_line.py"))
+
+    assert findings == []
+
+
+def test_inline_ignore_next_line() -> None:
+    findings = analyze_file(_fixture("ignore_next_line.py"))
+
+    assert findings == []
+
+
+def test_inline_ignore_specific_rule_only() -> None:
+    findings = analyze_file(_fixture("ignore_specific_rule.py"))
+
+    assert len(findings) == 1
+    assert findings[0].rule_id == "BLOCK_SLEEP"
+
+
+def test_analyze_source_inline_ignore() -> None:
+    source = """import time
+
+async def handler():
+    time.sleep(1)  # asyncblock: ignore
+"""
+    findings = analyze_source(source)
+
+    assert findings == []
+
+
 def test_ignores_time_sleep_in_sync_function() -> None:
     findings = analyze_file(_fixture("sync_sleep_ok.py"))
     sleep_findings = [f for f in findings if f.rule_id == "BLOCK_SLEEP"]
