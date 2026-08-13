@@ -23,7 +23,8 @@ def _top_level_module_name(qualified_name: str) -> str:
 
 
 _IGNORE_DIRECTIVE_RE = re.compile(
-    r"asyncblock:\s*ignore(?:-next-line)?(?:\s+([A-Z][A-Z0-9_]*(?:\s+[A-Z][A-Z0-9_]*)*))?",
+    r"asyncblock:\s*ignore(?P<next_line>-next-line)?"
+    r"(?:\s+(?P<rule_ids>[A-Z][A-Z0-9_]*(?:\s+[A-Z][A-Z0-9_]*)*))?",
     re.IGNORECASE,
 )
 
@@ -32,7 +33,7 @@ _IGNORE_DIRECTIVE_RE = re.compile(
 class _LineSuppression:
     """Rules suppressed on a specific source line."""
 
-    all_rules: bool = False
+    ignore_all: bool = False
     rule_ids: set[str] = field(default_factory=set)
 
 
@@ -53,17 +54,27 @@ def _parse_suppressions(source: str) -> dict[int, _LineSuppression]:
         if match is None:
             continue
 
-        target_line = token.start[0] + 1 if "ignore-next-line" in token.string else token.start[0]
-        rule_ids = match.group(1).split() if match.group(1) else ()
+        target_line = token.start[0] + (1 if match.group("next_line") else 0)
+        rule_ids = match.group("rule_ids")
         suppression = suppressions.setdefault(target_line, _LineSuppression())
 
-        if not rule_ids:
-            suppression.all_rules = True
+        if rule_ids is None:
+            suppression.ignore_all = True
             continue
 
-        suppression.rule_ids.update(rule_ids)
+        suppression.rule_ids.update(rule_ids.split())
 
     return suppressions
+
+
+def _is_finding_suppressed(
+    finding: Finding,
+    suppression: _LineSuppression | None,
+) -> bool:
+    """Return whether an inline ignore directive suppresses *finding*."""
+    if suppression is None:
+        return False
+    return suppression.ignore_all or finding.rule_id in suppression.rule_ids
 
 
 def _apply_suppressions(
@@ -74,16 +85,11 @@ def _apply_suppressions(
     if not suppressions:
         return findings
 
-    filtered: list[Finding] = []
-    for finding in findings:
-        suppression = suppressions.get(finding.line)
-        if suppression is None:
-            filtered.append(finding)
-            continue
-        if suppression.all_rules or finding.rule_id in suppression.rule_ids:
-            continue
-        filtered.append(finding)
-    return filtered
+    return [
+        finding
+        for finding in findings
+        if not _is_finding_suppressed(finding, suppressions.get(finding.line))
+    ]
 
 
 class _ImportMap:
@@ -117,7 +123,7 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
         self.findings: list[Finding] = []
         self.imports = _ImportMap()
         self._async_depth = 0
-        self._nested_sync_depth = 0
+        self._sync_in_async_depth = 0
 
     def visit_Module(self, node: ast.Module) -> None:
         self.imports.collect_from(node)
@@ -125,7 +131,7 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
 
     @property
     def _in_async_context(self) -> bool:
-        return self._async_depth > 0 or self._nested_sync_depth > 0
+        return self._async_depth > 0 or self._sync_in_async_depth > 0
 
     @contextmanager
     def _async_scope(self) -> Iterator[None]:
@@ -136,12 +142,12 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
             self._async_depth -= 1
 
     @contextmanager
-    def _nested_sync_scope(self) -> Iterator[None]:
-        self._nested_sync_depth += 1
+    def _sync_in_async_scope(self) -> Iterator[None]:
+        self._sync_in_async_depth += 1
         try:
             yield
         finally:
-            self._nested_sync_depth -= 1
+            self._sync_in_async_depth -= 1
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         with self._async_scope():
@@ -149,10 +155,10 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         if self._async_depth > 0:
-            with self._nested_sync_scope():
+            with self._sync_in_async_scope():
                 self.generic_visit(node)
-        else:
-            self.generic_visit(node)
+            return
+        self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
         if self._in_async_context:
@@ -160,22 +166,6 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
             if rule is not None:
                 self.findings.append(_make_finding(node, rule, self.filename))
         self.generic_visit(node)
-
-
-def _resolve_call_target(
-    func: ast.expr,
-    imports: _ImportMap,
-) -> tuple[str | None, str | None]:
-    """Resolve a call expression to ``(module, attr)``, when possible."""
-    if isinstance(func, ast.Name):
-        if func.id in imports.imported_symbols:
-            return imports.imported_symbols[func.id]
-        return None, None
-
-    if isinstance(func, ast.Attribute):
-        return _resolve_attribute(func, imports)
-
-    return None, None
 
 
 def _match_call(
@@ -188,10 +178,16 @@ def _match_call(
         for rule in rules:
             if rule.builtin and func.id == rule.builtin:
                 return rule
+        if func.id in imports.imported_symbols:
+            module, attr = imports.imported_symbols[func.id]
+            return _match_module_attr(module, attr, rules)
+        return None
 
-    module, attr = _resolve_call_target(func, imports)
-    if module is not None and attr is not None:
-        return _match_module_attr(module, attr, rules)
+    if isinstance(func, ast.Attribute):
+        module, attr = _resolve_attribute(func, imports)
+        if module is not None and attr is not None:
+            return _match_module_attr(module, attr, rules)
+
     return None
 
 
@@ -296,17 +292,14 @@ def summarize_findings(findings: list[Finding]) -> ScanSummary:
     """Aggregate finding counts by file and rule."""
     files = {finding.file for finding in findings}
     by_rule = Counter(finding.rule_id for finding in findings)
-    errors = sum(1 for finding in findings if finding.severity == "error")
-    warnings = len(findings) - errors
+    by_severity = Counter(finding.severity for finding in findings)
 
-    ranked_rules = tuple(
-        sorted(by_rule.items(), key=lambda item: (-item[1], item[0])),
-    )
+    ranked_rules = tuple(sorted(by_rule.items(), key=lambda item: (-item[1], item[0])))
     return ScanSummary(
         total=len(findings),
         files=len(files),
-        errors=errors,
-        warnings=warnings,
+        errors=by_severity["error"],
+        warnings=by_severity["warning"],
         by_rule=ranked_rules,
     )
 

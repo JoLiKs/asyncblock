@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Literal
+from typing import Literal, Protocol
 
 Severity = Literal["warning", "error"]
 
 _SEVERITY_RANK: dict[Severity, int] = {"warning": 0, "error": 1}
+
+
+class Serializable(Protocol):
+    """Object that can be exported as a plain dictionary."""
+
+    def to_dict(self) -> dict[str, object]: ...
 
 
 def meets_min_severity(severity: Severity, min_severity: Severity) -> bool:

@@ -34,6 +34,9 @@ asyncblock scan ./src
 # JSON-вывод для CI или скриптов
 asyncblock scan ./app --json
 
+# Формат file:line:col для grep, pre-commit и IDE
+asyncblock scan ./app --format unix
+
 # Анализ кода из stdin (удобно в пайплайнах и pre-commit)
 cat handlers.py | asyncblock scan -
 
@@ -61,10 +64,19 @@ asyncblock rules --json
 
 ### Пример вывода
 
+Таблица (по умолчанию):
+
 ```
 Location                          Rule             Message                                      Suggestion
 app/handlers.py:42                BLOCK_SLEEP      Blocking time.sleep() inside async code    Use asyncio.sleep() or anyio.sleep()
 app/db.py:18                      BLOCK_DB         Blocking sqlite3.connect() inside async…   Use aiosqlite.connect() or an async ORM driver
+```
+
+Формат `--format unix` (одна строка на finding, удобно для CI и `grep`):
+
+```
+app/handlers.py:42:5: BLOCK_SLEEP: Blocking time.sleep() inside async code
+app/db.py:18:12: BLOCK_DB: Blocking sqlite3.connect() inside async code
 ```
 
 Код выхода: `0` — проблем не найдено (или только warning), `1` — есть findings уровня **error**.

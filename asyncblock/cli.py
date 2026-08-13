@@ -6,19 +6,15 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, cast
 
 from asyncblock import __version__
 from asyncblock.analyzer import analyze_source, analyze_tree, filter_findings, summarize_findings
-from asyncblock.models import Finding, RuleInfo, ScanSummary, Severity
+from asyncblock.models import Finding, RuleInfo, ScanSummary, Serializable, Severity
 from asyncblock.rules import list_rules
 
 
-class _JsonSerializable(Protocol):
-    def to_dict(self) -> dict[str, object]: ...
-
-
-def _print_json(items: list[_JsonSerializable]) -> None:
+def _print_json(items: list[Serializable]) -> None:
     payload = [item.to_dict() for item in items]
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -43,6 +39,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="Output findings as JSON",
+    )
+    scan.add_argument(
+        "--format",
+        choices=("table", "unix"),
+        default="table",
+        help="Human-readable output format (default: table; ignored with --json)",
     )
     scan.add_argument(
         "--exclude",
@@ -119,6 +121,15 @@ def _render_table(
         header = "\t".join(title for title, _ in columns)
         body = ["\t".join(row) for row in rows]
         return "\n".join([header, *body])
+
+
+def _format_findings_unix(findings: list[Finding]) -> str:
+    if not findings:
+        return "No blocking calls found in async contexts."
+    return "\n".join(
+        f"{finding.file}:{finding.line}:{finding.col}: {finding.rule_id}: {finding.message}"
+        for finding in findings
+    )
 
 
 def _format_findings_table(findings: list[Finding]) -> str:
@@ -219,7 +230,10 @@ def _run_scan(args: argparse.Namespace) -> int:
             summary_json = json.dumps(summary.to_dict(), ensure_ascii=False)
             print(summary_json, file=sys.stderr)
     else:
-        print(_format_findings_table(findings))
+        if args.format == "unix":
+            print(_format_findings_unix(findings))
+        else:
+            print(_format_findings_table(findings))
         if summary is not None:
             print()
             print(_format_summary(summary))

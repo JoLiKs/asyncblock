@@ -115,3 +115,22 @@ def test_scan_command_summary_empty_scan(capsys) -> None:
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "no blocking calls found" in captured.out.lower()
+
+
+def test_scan_command_unix_format(capsys) -> None:
+    exit_code = main(["scan", str(FIXTURES / "block_sleep.py"), "--format", "unix"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert captured.out.strip() == (
+        f"{FIXTURES / 'block_sleep.py'}:5:5: BLOCK_SLEEP: "
+        "Blocking time.sleep() inside async code"
+    )
+
+
+def test_scan_command_unix_format_empty(capsys) -> None:
+    exit_code = main(["scan", str(FIXTURES / "async_sleep_ok.py"), "--format", "unix"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "no blocking calls found" in captured.out.lower()
