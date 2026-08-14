@@ -13,6 +13,12 @@ from asyncblock.analyzer import analyze_source, analyze_tree, filter_findings, s
 from asyncblock.models import Finding, RuleInfo, ScanSummary, Serializable, Severity
 from asyncblock.rules import list_rules
 
+_NO_FINDINGS_MESSAGE = "No blocking calls found in async contexts."
+
+
+def _scan_filters(args: argparse.Namespace) -> tuple[Severity, list[str] | None]:
+    return cast(Severity, args.severity), args.rule or None
+
 
 def _print_json(items: list[Serializable]) -> None:
     payload = [item.to_dict() for item in items]
@@ -125,7 +131,7 @@ def _render_table(
 
 def _format_findings_unix(findings: list[Finding]) -> str:
     if not findings:
-        return "No blocking calls found in async contexts."
+        return _NO_FINDINGS_MESSAGE
     return "\n".join(
         f"{finding.file}:{finding.line}:{finding.col}: {finding.rule_id}: {finding.message}"
         for finding in findings
@@ -144,7 +150,7 @@ def _format_findings_table(findings: list[Finding]) -> str:
             (finding.location, finding.rule_id, finding.message, finding.suggestion)
             for finding in findings
         ],
-        empty_message="No blocking calls found in async contexts.",
+        empty_message=_NO_FINDINGS_MESSAGE,
     )
 
 
@@ -203,8 +209,7 @@ def _scan_stdin(
 
 
 def _run_scan(args: argparse.Namespace) -> int:
-    rule_ids = args.rule or None
-    min_severity = cast(Severity, args.severity)
+    min_severity, rule_ids = _scan_filters(args)
 
     if args.path == "-":
         findings = _scan_stdin(min_severity=min_severity, rule_ids=rule_ids)

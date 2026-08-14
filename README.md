@@ -43,6 +43,9 @@ cat handlers.py | asyncblock scan -
 # Исключить тесты и миграции
 asyncblock scan . --exclude "tests/*" --exclude "**/migrations/*"
 
+# Или положить постоянные исключения в .asyncblockignore в корне проекта
+asyncblock scan .
+
 # Сканировать только исходники приложения
 asyncblock scan . --include "src/**/*.py" --include "app/**/*.py"
 
@@ -126,10 +129,22 @@ async def handler():
 
 Директива работает и при анализе через CLI, и при вызове `analyze_file()` / `analyze_source()` из Python.
 
+## Файл `.asyncblockignore`
+
+Чтобы не передавать одни и те же `--exclude` в CI и локально, создайте в корне проекта файл `.asyncblockignore` с glob-паттернами (по одному на строку, `#` — комментарий):
+
+```
+tests/**
+**/migrations/**
+legacy/**
+```
+
+При `asyncblock scan` паттерны из `.asyncblockignore` автоматически объединяются с `--exclude`. Файлы ищутся от каталога сканирования вверх по дереву — можно держать один ignore-файл в корне репозитория. В Python API те же паттерны подхватывает `analyze_tree()`; отдельно их можно прочитать через `load_ignore_patterns()`.
+
 ## Использование как библиотеки
 
 ```python
-from asyncblock import analyze_file, analyze_source, analyze_tree, Finding, list_rules, summarize_findings
+from asyncblock import analyze_file, analyze_source, analyze_tree, Finding, list_rules, load_ignore_patterns, summarize_findings
 
 findings: list[Finding] = analyze_file("app/handlers.py")
 summary = summarize_findings(findings)

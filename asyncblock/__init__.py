@@ -5,6 +5,7 @@ from asyncblock.analyzer import (
     analyze_source,
     analyze_tree,
     filter_findings,
+    load_ignore_patterns,
     summarize_findings,
 )
 from asyncblock.models import Finding, RuleInfo, ScanSummary
@@ -18,6 +19,7 @@ __all__ = [
     "analyze_source",
     "analyze_tree",
     "filter_findings",
+    "load_ignore_patterns",
     "list_rules",
     "summarize_findings",
 ]

@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from asyncblock.analyzer import analyze_file, analyze_source, analyze_tree, summarize_findings
+from asyncblock.analyzer import (
+    analyze_file,
+    analyze_source,
+    analyze_tree,
+    load_ignore_patterns,
+    summarize_findings,
+)
 from asyncblock.models import Finding
 from asyncblock.rules import Rule
 
@@ -129,6 +135,65 @@ def test_analyze_tree_include_multiple_patterns() -> None:
 
 def test_analyze_tree_include_empty_when_no_match() -> None:
     findings = analyze_tree(FIXTURES, include=["nonexistent/*.py"])
+
+    assert findings == []
+
+
+def test_load_ignore_patterns_reads_file(tmp_path: Path) -> None:
+    scan_root = tmp_path / "project"
+    ignored = scan_root / "ignored"
+    ignored.mkdir(parents=True)
+    (ignored / "bad.py").write_text(
+        "import time\n\nasync def handler():\n    time.sleep(1)\n",
+        encoding="utf-8",
+    )
+    (scan_root / "ok.py").write_text(
+        "import time\n\nasync def handler():\n    time.sleep(1)\n",
+        encoding="utf-8",
+    )
+    (scan_root / ".asyncblockignore").write_text(
+        "ignored/**\n# comment line\n\nlegacy/*.py\n",
+        encoding="utf-8",
+    )
+
+    assert load_ignore_patterns(scan_root) == ["ignored/**", "legacy/*.py"]
+
+
+def test_analyze_tree_respects_asyncblockignore(tmp_path: Path) -> None:
+    scan_root = tmp_path / "project"
+    ignored = scan_root / "ignored"
+    ignored.mkdir(parents=True)
+    (ignored / "bad.py").write_text(
+        "import time\n\nasync def handler():\n    time.sleep(1)\n",
+        encoding="utf-8",
+    )
+    (scan_root / "bad.py").write_text(
+        "import time\n\nasync def handler():\n    time.sleep(1)\n",
+        encoding="utf-8",
+    )
+    (scan_root / ".asyncblockignore").write_text("ignored/**\n", encoding="utf-8")
+
+    findings = analyze_tree(scan_root)
+
+    files = {Path(finding.file).name for finding in findings}
+    assert files == {"bad.py"}
+
+
+def test_analyze_tree_merges_cli_exclude_with_asyncblockignore(tmp_path: Path) -> None:
+    scan_root = tmp_path / "project"
+    ignored = scan_root / "ignored"
+    ignored.mkdir(parents=True)
+    (ignored / "bad.py").write_text(
+        "import time\n\nasync def handler():\n    time.sleep(1)\n",
+        encoding="utf-8",
+    )
+    (scan_root / "bad.py").write_text(
+        "import time\n\nasync def handler():\n    time.sleep(1)\n",
+        encoding="utf-8",
+    )
+    (scan_root / ".asyncblockignore").write_text("ignored/**\n", encoding="utf-8")
+
+    findings = analyze_tree(scan_root, exclude=["bad.py"])
 
     assert findings == []
 

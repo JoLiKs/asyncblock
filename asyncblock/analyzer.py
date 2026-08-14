@@ -123,7 +123,7 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
         self.findings: list[Finding] = []
         self.imports = _ImportMap()
         self._async_depth = 0
-        self._sync_in_async_depth = 0
+        self._nested_sync_depth = 0
 
     def visit_Module(self, node: ast.Module) -> None:
         self.imports.collect_from(node)
@@ -131,7 +131,7 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
 
     @property
     def _in_async_context(self) -> bool:
-        return self._async_depth > 0 or self._sync_in_async_depth > 0
+        return self._async_depth > 0 or self._nested_sync_depth > 0
 
     @contextmanager
     def _async_scope(self) -> Iterator[None]:
@@ -142,20 +142,20 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
             self._async_depth -= 1
 
     @contextmanager
-    def _sync_in_async_scope(self) -> Iterator[None]:
-        self._sync_in_async_depth += 1
+    def _nested_sync_scope(self) -> Iterator[None]:
+        self._nested_sync_depth += 1
         try:
             yield
         finally:
-            self._sync_in_async_depth -= 1
+            self._nested_sync_depth -= 1
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         with self._async_scope():
             self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        if self._async_depth > 0:
-            with self._sync_in_async_scope():
+        if self._in_async_context:
+            with self._nested_sync_scope():
                 self.generic_visit(node)
             return
         self.generic_visit(node)
@@ -168,6 +168,21 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+def _match_name_call(
+    name: str,
+    imports: _ImportMap,
+    rules: tuple[Rule, ...],
+) -> Rule | None:
+    """Return the first rule matching a bare name call such as ``open()`` or ``sleep()``."""
+    for rule in rules:
+        if rule.builtin and name == rule.builtin:
+            return rule
+    if name in imports.imported_symbols:
+        module, attr = imports.imported_symbols[name]
+        return _match_module_attr(module, attr, rules)
+    return None
+
+
 def _match_call(
     func: ast.expr,
     imports: _ImportMap,
@@ -175,13 +190,7 @@ def _match_call(
 ) -> Rule | None:
     """Return the first rule matching the given call expression."""
     if isinstance(func, ast.Name):
-        for rule in rules:
-            if rule.builtin and func.id == rule.builtin:
-                return rule
-        if func.id in imports.imported_symbols:
-            module, attr = imports.imported_symbols[func.id]
-            return _match_module_attr(module, attr, rules)
-        return None
+        return _match_name_call(func.id, imports, rules)
 
     if isinstance(func, ast.Attribute):
         module, attr = _resolve_attribute(func, imports)
@@ -255,13 +264,38 @@ def analyze_file(path: str | Path, rules: tuple[Rule, ...] | None = None) -> lis
     return analyze_source(source, filename=str(source_path), rules=rules)
 
 
-def _normalize_relative_path(relative_path: str) -> str:
-    return relative_path.replace("\\", "/")
+def _parse_ignore_file(path: Path) -> list[str]:
+    """Parse glob patterns from a ``.asyncblockignore`` file."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+
+    patterns: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        patterns.append(stripped)
+    return patterns
+
+
+def load_ignore_patterns(root: str | Path) -> list[str]:
+    """Load exclude globs from ``.asyncblockignore`` files along the path to root."""
+    root_path = Path(root).resolve()
+    directory = root_path.parent if root_path.is_file() else root_path
+
+    patterns: list[str] = []
+    for path in (directory, *directory.parents):
+        ignore_file = path / ".asyncblockignore"
+        if ignore_file.is_file():
+            patterns.extend(_parse_ignore_file(ignore_file))
+    return patterns
 
 
 def _matches_glob_patterns(relative_path: str, patterns: list[str]) -> bool:
-    normalized = _normalize_relative_path(relative_path)
-    return any(fnmatch.fnmatch(normalized, pattern) for pattern in patterns)
+    normalized_path = relative_path.replace("\\", "/")
+    return any(fnmatch.fnmatch(normalized_path, pattern) for pattern in patterns)
 
 
 def _should_scan_file(
@@ -330,7 +364,8 @@ def analyze_tree(
 ) -> list[Finding]:
     """Recursively analyze Python files under *root* and return aggregated findings."""
     root_path = Path(root)
-    exclude_patterns = exclude or []
+    exclude_patterns = list(exclude or [])
+    exclude_patterns.extend(load_ignore_patterns(root_path))
     include_patterns = include or []
     findings: list[Finding] = []
 
