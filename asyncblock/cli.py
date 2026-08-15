@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,7 +21,7 @@ def _scan_filters(args: argparse.Namespace) -> tuple[Severity, list[str] | None]
     return cast(Severity, args.severity), args.rule or None
 
 
-def _print_json(items: list[Serializable]) -> None:
+def _print_json(items: Sequence[Serializable]) -> None:
     payload = [item.to_dict() for item in items]
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -208,6 +209,30 @@ def _scan_stdin(
     return filter_findings(findings, min_severity=min_severity, rule_ids=rule_ids)
 
 
+def _write_scan_output(
+    findings: list[Finding],
+    *,
+    as_json: bool,
+    output_format: str,
+    summary: ScanSummary | None,
+) -> None:
+    """Print scan findings and an optional summary."""
+    if as_json:
+        _print_json(findings)
+        if summary is not None:
+            summary_json = json.dumps(summary.to_dict(), ensure_ascii=False)
+            print(summary_json, file=sys.stderr)
+        return
+
+    if output_format == "unix":
+        print(_format_findings_unix(findings))
+    else:
+        print(_format_findings_table(findings))
+    if summary is not None:
+        print()
+        print(_format_summary(summary))
+
+
 def _run_scan(args: argparse.Namespace) -> int:
     min_severity, rule_ids = _scan_filters(args)
 
@@ -228,20 +253,12 @@ def _run_scan(args: argparse.Namespace) -> int:
         )
 
     summary = summarize_findings(findings) if args.summary else None
-
-    if args.json:
-        _print_json(findings)
-        if summary is not None:
-            summary_json = json.dumps(summary.to_dict(), ensure_ascii=False)
-            print(summary_json, file=sys.stderr)
-    else:
-        if args.format == "unix":
-            print(_format_findings_unix(findings))
-        else:
-            print(_format_findings_table(findings))
-        if summary is not None:
-            print()
-            print(_format_summary(summary))
+    _write_scan_output(
+        findings,
+        as_json=args.json,
+        output_format=args.format,
+        summary=summary,
+    )
 
     has_errors = any(finding.severity == "error" for finding in findings)
     return 1 if has_errors else 0

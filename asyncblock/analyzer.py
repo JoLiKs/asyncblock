@@ -92,6 +92,35 @@ def _apply_suppressions(
     ]
 
 
+def _read_text(path: Path) -> str | None:
+    """Read UTF-8 text from *path*, returning ``None`` on I/O errors."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+class _DepthCounter:
+    """Tracks nesting depth for async or nested-sync scopes."""
+
+    __slots__ = ("_depth",)
+
+    def __init__(self) -> None:
+        self._depth = 0
+
+    @property
+    def active(self) -> bool:
+        return self._depth > 0
+
+    @contextmanager
+    def scope(self) -> Iterator[None]:
+        self._depth += 1
+        try:
+            yield
+        finally:
+            self._depth -= 1
+
+
 class _ImportMap:
     """Tracks import aliases for resolving call targets."""
 
@@ -99,7 +128,7 @@ class _ImportMap:
         self.module_aliases: dict[str, str] = {}
         self.imported_symbols: dict[str, tuple[str, str]] = {}
 
-    def collect_from(self, node: ast.AST) -> None:
+    def register_imports(self, node: ast.AST) -> None:
         for child in ast.walk(node):
             if isinstance(child, ast.Import):
                 for alias in child.names:
@@ -122,40 +151,24 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
         self.rules = rules
         self.findings: list[Finding] = []
         self.imports = _ImportMap()
-        self._async_depth = 0
-        self._nested_sync_depth = 0
+        self._async_depth = _DepthCounter()
+        self._nested_sync_depth = _DepthCounter()
 
     def visit_Module(self, node: ast.Module) -> None:
-        self.imports.collect_from(node)
+        self.imports.register_imports(node)
         self.generic_visit(node)
 
     @property
     def _in_async_context(self) -> bool:
-        return self._async_depth > 0 or self._nested_sync_depth > 0
-
-    @contextmanager
-    def _async_scope(self) -> Iterator[None]:
-        self._async_depth += 1
-        try:
-            yield
-        finally:
-            self._async_depth -= 1
-
-    @contextmanager
-    def _nested_sync_scope(self) -> Iterator[None]:
-        self._nested_sync_depth += 1
-        try:
-            yield
-        finally:
-            self._nested_sync_depth -= 1
+        return self._async_depth.active or self._nested_sync_depth.active
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        with self._async_scope():
+        with self._async_depth.scope():
             self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         if self._in_async_context:
-            with self._nested_sync_scope():
+            with self._nested_sync_depth.scope():
                 self.generic_visit(node)
             return
         self.generic_visit(node)
@@ -255,10 +268,8 @@ def analyze_source(
 def analyze_file(path: str | Path, rules: tuple[Rule, ...] | None = None) -> list[Finding]:
     """Analyze a single Python file and return findings for blocking calls in async code."""
     source_path = Path(path)
-
-    try:
-        source = source_path.read_text(encoding="utf-8")
-    except OSError:
+    source = _read_text(source_path)
+    if source is None:
         return []
 
     return analyze_source(source, filename=str(source_path), rules=rules)
@@ -266,17 +277,15 @@ def analyze_file(path: str | Path, rules: tuple[Rule, ...] | None = None) -> lis
 
 def _parse_ignore_file(path: Path) -> list[str]:
     """Parse glob patterns from a ``.asyncblockignore`` file."""
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    content = _read_text(path)
+    if content is None:
         return []
 
     patterns: list[str] = []
-    for line in lines:
+    for line in content.splitlines():
         stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        patterns.append(stripped)
+        if stripped and not stripped.startswith("#"):
+            patterns.append(stripped)
     return patterns
 
 
@@ -309,7 +318,7 @@ def _should_scan_file(
     return not include_patterns or _matches_glob_patterns(relative_path, include_patterns)
 
 
-def _iter_python_files(root_path: Path) -> list[tuple[Path, str]]:
+def _collect_python_files(root_path: Path) -> list[tuple[Path, str]]:
     """Return ``(absolute_path, relative_path)`` pairs for scannable Python files."""
     if root_path.is_file():
         if root_path.suffix != ".py":
@@ -364,12 +373,11 @@ def analyze_tree(
 ) -> list[Finding]:
     """Recursively analyze Python files under *root* and return aggregated findings."""
     root_path = Path(root)
-    exclude_patterns = list(exclude or [])
-    exclude_patterns.extend(load_ignore_patterns(root_path))
+    exclude_patterns = [*(exclude or []), *load_ignore_patterns(root_path)]
     include_patterns = include or []
     findings: list[Finding] = []
 
-    for file_path, relative_path in _iter_python_files(root_path):
+    for file_path, relative_path in _collect_python_files(root_path):
         if not _should_scan_file(
             relative_path,
             include_patterns=include_patterns,
