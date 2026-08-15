@@ -28,6 +28,9 @@ class Rule:
         return f"{self.module}.{self.attr}()"
 
 
+RuleSet = tuple[Rule, ...]
+
+
 def _module_attr_rule(
     rule_id: str,
     module: str,
@@ -53,7 +56,7 @@ _SUBPROCESS_SUGGESTION = (
 )
 _SOCKET_SUGGESTION = "Use asyncio.open_connection() or asyncio streams"
 
-RULES: tuple[Rule, ...] = (
+RULES: RuleSet = (
     _module_attr_rule(
         "BLOCK_SLEEP",
         "time",
@@ -95,19 +98,19 @@ RULES: tuple[Rule, ...] = (
 
 def list_rules() -> tuple[RuleInfo, ...]:
     """Return built-in rules grouped by ``rule_id`` with matched call patterns."""
-    patterns_by_id: dict[str, list[str]] = defaultdict(list)
-    primary_rule_by_id: dict[str, Rule] = {}
+    patterns_by_rule: dict[str, list[str]] = defaultdict(list)
+    representative: dict[str, Rule] = {}
 
     for rule in RULES:
-        patterns_by_id[rule.rule_id].append(rule.pattern)
-        primary_rule_by_id.setdefault(rule.rule_id, rule)
+        patterns_by_rule[rule.rule_id].append(rule.pattern)
+        representative.setdefault(rule.rule_id, rule)
 
     return tuple(
         RuleInfo(
             rule_id=rule_id,
             patterns=tuple(patterns),
-            suggestion=primary_rule_by_id[rule_id].suggestion,
-            severity=primary_rule_by_id[rule_id].severity,
+            suggestion=representative[rule_id].suggestion,
+            severity=representative[rule_id].severity,
         )
-        for rule_id, patterns in patterns_by_id.items()
+        for rule_id, patterns in patterns_by_rule.items()
     )

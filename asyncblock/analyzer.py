@@ -14,7 +14,7 @@ from io import StringIO
 from pathlib import Path
 
 from asyncblock.models import Finding, ScanSummary, Severity, meets_min_severity
-from asyncblock.rules import RULES, Rule
+from asyncblock.rules import RULES, Rule, RuleSet
 
 
 def _top_level_module_name(qualified_name: str) -> str:
@@ -92,6 +92,14 @@ def _apply_suppressions(
     ]
 
 
+def _iter_non_comment_lines(content: str) -> Iterator[str]:
+    """Yield stripped, non-empty lines that are not ``#`` comments."""
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            yield stripped
+
+
 def _read_text(path: Path) -> str | None:
     """Read UTF-8 text from *path*, returning ``None`` on I/O errors."""
     try:
@@ -100,7 +108,7 @@ def _read_text(path: Path) -> str | None:
         return None
 
 
-class _DepthCounter:
+class _ScopeDepth:
     """Tracks nesting depth for async or nested-sync scopes."""
 
     __slots__ = ("_depth",)
@@ -131,28 +139,36 @@ class _ImportMap:
     def register_imports(self, node: ast.AST) -> None:
         for child in ast.walk(node):
             if isinstance(child, ast.Import):
-                for alias in child.names:
-                    local = alias.asname or _top_level_module_name(alias.name)
-                    self.module_aliases[local] = _top_level_module_name(alias.name)
-            elif isinstance(child, ast.ImportFrom) and child.module:
-                module = _top_level_module_name(child.module)
-                for alias in child.names:
-                    if alias.name == "*":
-                        continue
-                    local = alias.asname or alias.name
-                    self.imported_symbols[local] = (module, alias.name)
+                self._register_import(child)
+            elif isinstance(child, ast.ImportFrom):
+                self._register_import_from(child)
+
+    def _register_import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            local = alias.asname or _top_level_module_name(alias.name)
+            self.module_aliases[local] = _top_level_module_name(alias.name)
+
+    def _register_import_from(self, node: ast.ImportFrom) -> None:
+        if not node.module:
+            return
+        module = _top_level_module_name(node.module)
+        for alias in node.names:
+            if alias.name == "*":
+                continue
+            local = alias.asname or alias.name
+            self.imported_symbols[local] = (module, alias.name)
 
 
-class _AsyncBlockingVisitor(ast.NodeVisitor):
+class _BlockingCallVisitor(ast.NodeVisitor):
     """Walks AST and collects blocking calls inside async contexts."""
 
-    def __init__(self, filename: str, rules: tuple[Rule, ...]) -> None:
+    def __init__(self, filename: str, rules: RuleSet) -> None:
         self.filename = filename
         self.rules = rules
         self.findings: list[Finding] = []
         self.imports = _ImportMap()
-        self._async_depth = _DepthCounter()
-        self._nested_sync_depth = _DepthCounter()
+        self._async_depth = _ScopeDepth()
+        self._nested_sync_depth = _ScopeDepth()
 
     def visit_Module(self, node: ast.Module) -> None:
         self.imports.register_imports(node)
@@ -184,7 +200,7 @@ class _AsyncBlockingVisitor(ast.NodeVisitor):
 def _match_name_call(
     name: str,
     imports: _ImportMap,
-    rules: tuple[Rule, ...],
+    rules: RuleSet,
 ) -> Rule | None:
     """Return the first rule matching a bare name call such as ``open()`` or ``sleep()``."""
     for rule in rules:
@@ -199,7 +215,7 @@ def _match_name_call(
 def _match_call(
     func: ast.expr,
     imports: _ImportMap,
-    rules: tuple[Rule, ...],
+    rules: RuleSet,
 ) -> Rule | None:
     """Return the first rule matching the given call expression."""
     if isinstance(func, ast.Name):
@@ -226,7 +242,7 @@ def _resolve_attribute(node: ast.Attribute, imports: _ImportMap) -> tuple[str | 
     return None, None
 
 
-def _match_module_attr(module: str, attr: str, rules: tuple[Rule, ...]) -> Rule | None:
+def _match_module_attr(module: str, attr: str, rules: RuleSet) -> Rule | None:
     for rule in rules:
         if rule.module == module and rule.attr == attr:
             return rule
@@ -250,7 +266,7 @@ def analyze_source(
     source: str,
     *,
     filename: str = "<string>",
-    rules: tuple[Rule, ...] | None = None,
+    rules: RuleSet | None = None,
 ) -> list[Finding]:
     """Analyze Python source text and return findings for blocking calls in async code."""
     active_rules = rules if rules is not None else RULES
@@ -260,12 +276,12 @@ def analyze_source(
     except SyntaxError:
         return []
 
-    visitor = _AsyncBlockingVisitor(filename, active_rules)
+    visitor = _BlockingCallVisitor(filename, active_rules)
     visitor.visit(tree)
     return _apply_suppressions(visitor.findings, _parse_suppressions(source))
 
 
-def analyze_file(path: str | Path, rules: tuple[Rule, ...] | None = None) -> list[Finding]:
+def analyze_file(path: str | Path, rules: RuleSet | None = None) -> list[Finding]:
     """Analyze a single Python file and return findings for blocking calls in async code."""
     source_path = Path(path)
     source = _read_text(source_path)
@@ -280,13 +296,7 @@ def _parse_ignore_file(path: Path) -> list[str]:
     content = _read_text(path)
     if content is None:
         return []
-
-    patterns: list[str] = []
-    for line in content.splitlines():
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#"):
-            patterns.append(stripped)
-    return patterns
+    return list(_iter_non_comment_lines(content))
 
 
 def load_ignore_patterns(root: str | Path) -> list[str]:

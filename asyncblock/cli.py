@@ -7,7 +7,7 @@ import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from asyncblock import __version__
 from asyncblock.analyzer import analyze_source, analyze_tree, filter_findings, summarize_findings
@@ -15,9 +15,10 @@ from asyncblock.models import Finding, RuleInfo, ScanSummary, Serializable, Seve
 from asyncblock.rules import list_rules
 
 _NO_FINDINGS_MESSAGE = "No blocking calls found in async contexts."
+OutputFormat = Literal["table", "unix"]
 
 
-def _scan_filters(args: argparse.Namespace) -> tuple[Severity, list[str] | None]:
+def _parse_scan_filters(args: argparse.Namespace) -> tuple[Severity, list[str] | None]:
     return cast(Severity, args.severity), args.rule or None
 
 
@@ -133,9 +134,13 @@ def _render_table(
 def _format_findings_unix(findings: list[Finding]) -> str:
     if not findings:
         return _NO_FINDINGS_MESSAGE
-    return "\n".join(
-        f"{finding.file}:{finding.line}:{finding.col}: {finding.rule_id}: {finding.message}"
-        for finding in findings
+    return "\n".join(_format_finding_unix(finding) for finding in findings)
+
+
+def _format_finding_unix(finding: Finding) -> str:
+    return (
+        f"{finding.file}:{finding.line}:{finding.col}: "
+        f"{finding.rule_id}: {finding.message}"
     )
 
 
@@ -213,7 +218,7 @@ def _write_scan_output(
     findings: list[Finding],
     *,
     as_json: bool,
-    output_format: str,
+    output_format: OutputFormat,
     summary: ScanSummary | None,
 ) -> None:
     """Print scan findings and an optional summary."""
@@ -234,7 +239,7 @@ def _write_scan_output(
 
 
 def _run_scan(args: argparse.Namespace) -> int:
-    min_severity, rule_ids = _scan_filters(args)
+    min_severity, rule_ids = _parse_scan_filters(args)
 
     if args.path == "-":
         findings = _scan_stdin(min_severity=min_severity, rule_ids=rule_ids)
@@ -256,12 +261,11 @@ def _run_scan(args: argparse.Namespace) -> int:
     _write_scan_output(
         findings,
         as_json=args.json,
-        output_format=args.format,
+        output_format=cast(OutputFormat, args.format),
         summary=summary,
     )
 
-    has_errors = any(finding.severity == "error" for finding in findings)
-    return 1 if has_errors else 0
+    return 1 if any(finding.severity == "error" for finding in findings) else 0
 
 
 def main(argv: list[str] | None = None) -> int:

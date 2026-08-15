@@ -19,8 +19,8 @@ __all__ = [
     "analyze_source",
     "analyze_tree",
     "filter_findings",
-    "load_ignore_patterns",
     "list_rules",
+    "load_ignore_patterns",
     "summarize_findings",
 ]
 __version__ = "0.1.0"
