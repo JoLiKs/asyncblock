@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -15,7 +15,8 @@ from asyncblock.models import Finding, RuleInfo, ScanSummary, Serializable, Seve
 from asyncblock.rules import list_rules
 
 _NO_FINDINGS_MESSAGE = "No blocking calls found in async contexts."
-OutputFormat = Literal["table", "unix"]
+OutputFormat = Literal["table", "unix", "github"]
+CommandHandler = Callable[[argparse.Namespace], int]
 
 
 def _parse_scan_filters(args: argparse.Namespace) -> tuple[Severity, list[str] | None]:
@@ -50,9 +51,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     scan.add_argument(
         "--format",
-        choices=("table", "unix"),
+        choices=("table", "unix", "github"),
         default="table",
-        help="Human-readable output format (default: table; ignored with --json)",
+        help="Human-readable output format: table, unix, or github (default: table; ignored with --json)",
     )
     scan.add_argument(
         "--exclude",
@@ -134,14 +135,13 @@ def _render_table(
 def _format_findings_unix(findings: list[Finding]) -> str:
     if not findings:
         return _NO_FINDINGS_MESSAGE
-    return "\n".join(_format_finding_unix(finding) for finding in findings)
+    return "\n".join(finding.format_unix() for finding in findings)
 
 
-def _format_finding_unix(finding: Finding) -> str:
-    return (
-        f"{finding.file}:{finding.line}:{finding.col}: "
-        f"{finding.rule_id}: {finding.message}"
-    )
+def _format_findings_github(findings: list[Finding]) -> str:
+    if not findings:
+        return _NO_FINDINGS_MESSAGE
+    return "\n".join(finding.format_github() for finding in findings)
 
 
 def _format_findings_table(findings: list[Finding]) -> str:
@@ -231,6 +231,8 @@ def _write_scan_output(
 
     if output_format == "unix":
         print(_format_findings_unix(findings))
+    elif output_format == "github":
+        print(_format_findings_github(findings))
     else:
         print(_format_findings_table(findings))
     if summary is not None:
@@ -268,16 +270,17 @@ def _run_scan(args: argparse.Namespace) -> int:
     return 1 if any(finding.severity == "error" for finding in findings) else 0
 
 
+_COMMAND_HANDLERS: dict[str, CommandHandler] = {
+    "scan": _run_scan,
+    "rules": _run_rules,
+}
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point for the asyncblock CLI."""
-    parser = _build_parser()
-    args = parser.parse_args(argv)
-
-    if args.command == "scan":
-        return _run_scan(args)
-    if args.command == "rules":
-        return _run_rules(args)
-    return 0
+    args = _build_parser().parse_args(argv)
+    handler = _COMMAND_HANDLERS.get(args.command)
+    return handler(args) if handler is not None else 0
 
 
 if __name__ == "__main__":

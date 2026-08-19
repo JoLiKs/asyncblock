@@ -37,6 +37,9 @@ asyncblock scan ./app --json
 # Формат file:line:col для grep, pre-commit и IDE
 asyncblock scan ./app --format unix
 
+# GitHub Actions workflow commands — аннотации в PR и CI
+asyncblock scan ./app --format github
+
 # Анализ кода из stdin (удобно в пайплайнах и pre-commit)
 cat handlers.py | asyncblock scan -
 
@@ -80,6 +83,20 @@ app/db.py:18                      BLOCK_DB         Blocking sqlite3.connect() in
 ```
 app/handlers.py:42:5: BLOCK_SLEEP: Blocking time.sleep() inside async code
 app/db.py:18:12: BLOCK_DB: Blocking sqlite3.connect() inside async code
+```
+
+Формат `--format github` (workflow commands для аннотаций в GitHub Actions):
+
+```
+::error file=app/handlers.py,line=42,col=5,title=BLOCK_SLEEP::Blocking time.sleep() inside async code — Use asyncio.sleep() or anyio.sleep()
+::error file=app/db.py,line=18,col=12,title=BLOCK_DB::Blocking sqlite3.connect() inside async code — Use aiosqlite.connect() or an async ORM driver
+```
+
+В GitHub Actions вывод попадает в Annotations на странице workflow run и в diff PR:
+
+```yaml
+- name: Check blocking calls in async code
+  run: asyncblock scan ./src --format github
 ```
 
 Код выхода: `0` — проблем не найдено (или только warning), `1` — есть findings уровня **error**.

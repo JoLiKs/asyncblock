@@ -7,7 +7,7 @@ import fnmatch
 import re
 import tokenize
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from io import StringIO
@@ -15,6 +15,8 @@ from pathlib import Path
 
 from asyncblock.models import Finding, ScanSummary, Severity, meets_min_severity
 from asyncblock.rules import RULES, Rule, RuleSet
+
+PathLike = str | Path
 
 
 def _top_level_module_name(qualified_name: str) -> str:
@@ -33,7 +35,7 @@ _IGNORE_DIRECTIVE_RE = re.compile(
 class _LineSuppression:
     """Rules suppressed on a specific source line."""
 
-    ignore_all: bool = False
+    suppress_all: bool = False
     rule_ids: set[str] = field(default_factory=set)
 
 
@@ -59,7 +61,7 @@ def _parse_suppressions(source: str) -> dict[int, _LineSuppression]:
         suppression = suppressions.setdefault(target_line, _LineSuppression())
 
         if rule_ids is None:
-            suppression.ignore_all = True
+            suppression.suppress_all = True
             continue
 
         suppression.rule_ids.update(rule_ids.split())
@@ -74,7 +76,7 @@ def _is_finding_suppressed(
     """Return whether an inline ignore directive suppresses *finding*."""
     if suppression is None:
         return False
-    return suppression.ignore_all or finding.rule_id in suppression.rule_ids
+    return suppression.suppress_all or finding.rule_id in suppression.rule_ids
 
 
 def _apply_suppressions(
@@ -197,15 +199,30 @@ class _BlockingCallVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+def _first_matching_rule(
+    rules: RuleSet,
+    predicate: Callable[[Rule], bool],
+) -> Rule | None:
+    """Return the first rule for which *predicate* is true."""
+    for rule in rules:
+        if predicate(rule):
+            return rule
+    return None
+
+
 def _match_name_call(
     name: str,
     imports: _ImportMap,
     rules: RuleSet,
 ) -> Rule | None:
     """Return the first rule matching a bare name call such as ``open()`` or ``sleep()``."""
-    for rule in rules:
-        if rule.builtin and name == rule.builtin:
-            return rule
+    builtin_match = _first_matching_rule(
+        rules,
+        lambda rule: rule.builtin is not None and name == rule.builtin,
+    )
+    if builtin_match is not None:
+        return builtin_match
+
     if name in imports.imported_symbols:
         module, attr = imports.imported_symbols[name]
         return _match_module_attr(module, attr, rules)
@@ -243,10 +260,10 @@ def _resolve_attribute(node: ast.Attribute, imports: _ImportMap) -> tuple[str | 
 
 
 def _match_module_attr(module: str, attr: str, rules: RuleSet) -> Rule | None:
-    for rule in rules:
-        if rule.module == module and rule.attr == attr:
-            return rule
-    return None
+    return _first_matching_rule(
+        rules,
+        lambda rule: rule.module == module and rule.attr == attr,
+    )
 
 
 def _make_finding(node: ast.Call, rule: Rule, filename: str) -> Finding:
@@ -281,7 +298,7 @@ def analyze_source(
     return _apply_suppressions(visitor.findings, _parse_suppressions(source))
 
 
-def analyze_file(path: str | Path, rules: RuleSet | None = None) -> list[Finding]:
+def analyze_file(path: PathLike, rules: RuleSet | None = None) -> list[Finding]:
     """Analyze a single Python file and return findings for blocking calls in async code."""
     source_path = Path(path)
     source = _read_text(source_path)
@@ -299,7 +316,7 @@ def _parse_ignore_file(path: Path) -> list[str]:
     return list(_iter_non_comment_lines(content))
 
 
-def load_ignore_patterns(root: str | Path) -> list[str]:
+def load_ignore_patterns(root: PathLike) -> list[str]:
     """Load exclude globs from ``.asyncblockignore`` files along the path to root."""
     root_path = Path(root).resolve()
     directory = root_path.parent if root_path.is_file() else root_path
@@ -374,7 +391,7 @@ def filter_findings(
 
 
 def analyze_tree(
-    root: str | Path,
+    root: PathLike,
     *,
     exclude: list[str] | None = None,
     include: list[str] | None = None,

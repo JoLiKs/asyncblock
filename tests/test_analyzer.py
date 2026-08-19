@@ -289,6 +289,48 @@ def test_scan_summary_to_dict() -> None:
     assert data["by_rule"] == {"BLOCK_SLEEP": 1}
 
 
+def test_finding_format_github() -> None:
+    finding = Finding(
+        file="app.py",
+        line=10,
+        col=4,
+        rule_id="BLOCK_SLEEP",
+        message="Blocking sleep",
+        suggestion="Use asyncio.sleep",
+        severity="error",
+    )
+    assert finding.format_github() == (
+        "::error file=app.py,line=10,col=4,title=BLOCK_SLEEP::"
+        "Blocking sleep — Use asyncio.sleep"
+    )
+
+
+def test_finding_format_github_warning() -> None:
+    finding = Finding(
+        file="app.py",
+        line=3,
+        col=1,
+        rule_id="CUSTOM",
+        message="Heads up",
+        suggestion="Fix it",
+        severity="warning",
+    )
+    assert finding.format_github().startswith("::warning file=app.py,line=3,col=1,title=CUSTOM::")
+
+
+def test_finding_format_github_escapes_special_chars() -> None:
+    finding = Finding(
+        file="app.py",
+        line=1,
+        col=1,
+        rule_id="BLOCK_FILE",
+        message="100% blocking\nopen()",
+        suggestion="use aiofiles",
+    )
+    formatted = finding.format_github()
+    assert "100%25 blocking%0Aopen()" in formatted
+
+
 def test_finding_to_dict() -> None:
     finding = Finding(
         file="app.py",

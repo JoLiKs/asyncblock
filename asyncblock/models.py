@@ -78,6 +78,20 @@ class Finding:
         """Human-readable ``file:line`` location."""
         return f"{self.file}:{self.line}"
 
+    def format_unix(self) -> str:
+        """Format as ``file:line:col: RULE_ID: message`` for CI and grep."""
+        return f"{self.file}:{self.line}:{self.col}: {self.rule_id}: {self.message}"
+
+    def format_github(self) -> str:
+        """Format as a GitHub Actions workflow command for CI annotations."""
+        level = "error" if self.severity == "error" else "warning"
+        message = f"{self.message} — {self.suggestion}"
+        message = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        return (
+            f"::{level} file={self.file},line={self.line},col={self.col},"
+            f"title={self.rule_id}::{message}"
+        )
+
     def to_dict(self) -> dict[str, str | int]:
         """Serialize the finding to a plain dictionary."""
         return asdict(self)

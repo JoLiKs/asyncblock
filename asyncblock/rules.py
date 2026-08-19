@@ -96,21 +96,26 @@ RULES: RuleSet = (
 )
 
 
-def list_rules() -> tuple[RuleInfo, ...]:
-    """Return built-in rules grouped by ``rule_id`` with matched call patterns."""
-    patterns_by_rule: dict[str, list[str]] = defaultdict(list)
-    representative: dict[str, Rule] = {}
+def _build_rule_catalog(rules: RuleSet) -> tuple[RuleInfo, ...]:
+    """Group rules by ``rule_id`` while preserving first-seen order."""
+    patterns_by_id: dict[str, list[str]] = defaultdict(list)
+    template_by_id: dict[str, Rule] = {}
 
-    for rule in RULES:
-        patterns_by_rule[rule.rule_id].append(rule.pattern)
-        representative.setdefault(rule.rule_id, rule)
+    for rule in rules:
+        patterns_by_id[rule.rule_id].append(rule.pattern)
+        template_by_id.setdefault(rule.rule_id, rule)
 
     return tuple(
         RuleInfo(
             rule_id=rule_id,
-            patterns=tuple(patterns),
-            suggestion=representative[rule_id].suggestion,
-            severity=representative[rule_id].severity,
+            patterns=tuple(patterns_by_id[rule_id]),
+            suggestion=template_by_id[rule_id].suggestion,
+            severity=template_by_id[rule_id].severity,
         )
-        for rule_id, patterns in patterns_by_rule.items()
+        for rule_id in patterns_by_id
     )
+
+
+def list_rules() -> tuple[RuleInfo, ...]:
+    """Return built-in rules grouped by ``rule_id`` with matched call patterns."""
+    return _build_rule_catalog(RULES)
