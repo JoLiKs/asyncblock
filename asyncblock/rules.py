@@ -99,20 +99,20 @@ RULES: RuleSet = (
 def _build_rule_catalog(rules: RuleSet) -> tuple[RuleInfo, ...]:
     """Group rules by ``rule_id`` while preserving first-seen order."""
     patterns_by_id: dict[str, list[str]] = defaultdict(list)
-    template_by_id: dict[str, Rule] = {}
+    representative_by_id: dict[str, Rule] = {}
 
     for rule in rules:
         patterns_by_id[rule.rule_id].append(rule.pattern)
-        template_by_id.setdefault(rule.rule_id, rule)
+        representative_by_id.setdefault(rule.rule_id, rule)
 
     return tuple(
         RuleInfo(
             rule_id=rule_id,
             patterns=tuple(patterns_by_id[rule_id]),
-            suggestion=template_by_id[rule_id].suggestion,
-            severity=template_by_id[rule_id].severity,
+            suggestion=representative_by_id[rule_id].suggestion,
+            severity=representative_by_id[rule_id].severity,
         )
-        for rule_id in patterns_by_id
+        for rule_id in representative_by_id
     )
 
 

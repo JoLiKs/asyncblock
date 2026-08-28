@@ -101,7 +101,7 @@ app/db.py:18:12: BLOCK_DB: Blocking sqlite3.connect() inside async code
 
 Код выхода: `0` — проблем не найдено (или только warning), `1` — есть findings уровня **error**.
 
-С флагом `--summary` после таблицы выводится краткая сводка: число findings, затронутых файлов, разбивка по severity и по правилам. В режиме `--json` сводка печатается в stderr одной JSON-строкой, чтобы stdout оставался массивом findings.
+С флагом `--summary` после таблицы выводится краткая сводка: число findings, затронутых файлов, сколько Python-файлов было просканировано (с учётом `--include` / `--exclude` и `.asyncblockignore`), разбивка по severity и по правилам. В режиме `--json` сводка печатается в stderr одной JSON-строкой, чтобы stdout оставался массивом findings.
 
 ### Команда `rules`
 
@@ -161,11 +161,11 @@ legacy/**
 ## Использование как библиотеки
 
 ```python
-from asyncblock import analyze_file, analyze_source, analyze_tree, Finding, list_rules, load_ignore_patterns, summarize_findings
+from asyncblock import analyze_file, analyze_source, analyze_tree, Finding, list_rules, load_ignore_patterns, scan_tree, summarize_findings
 
 findings: list[Finding] = analyze_file("app/handlers.py")
-summary = summarize_findings(findings)
-print(f"{summary.total} issues in {summary.files} files")
+summary = summarize_findings(findings, files_scanned=1)
+print(f"{summary.total} issues in {summary.files} files ({summary.files_scanned} scanned)")
 for rule_id, count in summary.by_rule:
     print(f"  {rule_id}: {count}")
 
@@ -176,6 +176,10 @@ snippet_findings = analyze_source(
 )
 
 all_findings = analyze_tree("./src", exclude=["tests/*"])
+
+# Findings вместе с числом просканированных файлов
+scan_result = scan_tree("./src", exclude=["tests/*"])
+print(f"Scanned {scan_result.files_scanned} files, found {len(scan_result.findings)} issues")
 
 # Только файлы, попадающие под glob-паттерны
 src_findings = analyze_tree("./", include=["src/**/*.py"])

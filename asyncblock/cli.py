@@ -10,12 +10,14 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 from asyncblock import __version__
-from asyncblock.analyzer import analyze_source, analyze_tree, filter_findings, summarize_findings
+from asyncblock.analyzer import analyze_source, filter_findings, scan_tree, summarize_findings
 from asyncblock.models import Finding, RuleInfo, ScanSummary, Serializable, Severity
 from asyncblock.rules import list_rules
 
 _NO_FINDINGS_MESSAGE = "No blocking calls found in async contexts."
 OutputFormat = Literal["table", "unix", "github"]
+FindingFormatter = Callable[[Finding], str]
+FindingsFormatter = Callable[[list[Finding]], str]
 CommandHandler = Callable[[argparse.Namespace], int]
 
 
@@ -132,16 +134,22 @@ def _render_table(
         return "\n".join([header, *body])
 
 
-def _format_findings_unix(findings: list[Finding]) -> str:
+def _format_findings_lines(
+    findings: list[Finding],
+    *,
+    line_formatter: FindingFormatter,
+) -> str:
     if not findings:
         return _NO_FINDINGS_MESSAGE
-    return "\n".join(finding.format_unix() for finding in findings)
+    return "\n".join(line_formatter(finding) for finding in findings)
+
+
+def _format_findings_unix(findings: list[Finding]) -> str:
+    return _format_findings_lines(findings, line_formatter=Finding.format_unix)
 
 
 def _format_findings_github(findings: list[Finding]) -> str:
-    if not findings:
-        return _NO_FINDINGS_MESSAGE
-    return "\n".join(finding.format_github() for finding in findings)
+    return _format_findings_lines(findings, line_formatter=Finding.format_github)
 
 
 def _format_findings_table(findings: list[Finding]) -> str:
@@ -162,6 +170,11 @@ def _format_findings_table(findings: list[Finding]) -> str:
 
 def _format_summary(summary: ScanSummary) -> str:
     if summary.total == 0:
+        if summary.files_scanned:
+            return (
+                f"Summary: no blocking calls found "
+                f"({_pluralize(summary.files_scanned, 'file')} scanned)."
+            )
         return "Summary: no blocking calls found."
 
     parts = [_pluralize(summary.total, "finding"), f"in {_pluralize(summary.files, 'file')}"]
@@ -171,6 +184,8 @@ def _format_summary(summary: ScanSummary) -> str:
     if summary.warnings:
         severity_parts.append(_pluralize(summary.warnings, "warning"))
     lines = [f"Summary: {', '.join(parts)} ({', '.join(severity_parts)})"]
+    if summary.files_scanned:
+        lines.append(f"  {_pluralize(summary.files_scanned, 'file')} scanned")
     for rule_id, count in summary.by_rule:
         lines.append(f"  {rule_id}: {count}")
     return "\n".join(lines)
@@ -214,6 +229,13 @@ def _scan_stdin(
     return filter_findings(findings, min_severity=min_severity, rule_ids=rule_ids)
 
 
+_FINDINGS_FORMATTERS: dict[OutputFormat, FindingsFormatter] = {
+    "table": _format_findings_table,
+    "unix": _format_findings_unix,
+    "github": _format_findings_github,
+}
+
+
 def _write_scan_output(
     findings: list[Finding],
     *,
@@ -229,12 +251,7 @@ def _write_scan_output(
             print(summary_json, file=sys.stderr)
         return
 
-    if output_format == "unix":
-        print(_format_findings_unix(findings))
-    elif output_format == "github":
-        print(_format_findings_github(findings))
-    else:
-        print(_format_findings_table(findings))
+    print(_FINDINGS_FORMATTERS[output_format](findings))
     if summary is not None:
         print()
         print(_format_summary(summary))
@@ -242,24 +259,30 @@ def _write_scan_output(
 
 def _run_scan(args: argparse.Namespace) -> int:
     min_severity, rule_ids = _parse_scan_filters(args)
+    files_scanned = 0
 
     if args.path == "-":
         findings = _scan_stdin(min_severity=min_severity, rule_ids=rule_ids)
+        files_scanned = 1
     else:
         path = Path(args.path)
         if not path.exists():
             print(f"Error: path does not exist: {path}", file=sys.stderr)
             return 2
 
-        findings = analyze_tree(
+        scan_result = scan_tree(
             path,
             exclude=args.exclude,
             include=args.include,
             min_severity=min_severity,
             rule_ids=rule_ids,
         )
+        findings = scan_result.findings
+        files_scanned = scan_result.files_scanned
 
-    summary = summarize_findings(findings) if args.summary else None
+    summary = (
+        summarize_findings(findings, files_scanned=files_scanned) if args.summary else None
+    )
     _write_scan_output(
         findings,
         as_json=args.json,

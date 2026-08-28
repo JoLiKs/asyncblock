@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from io import StringIO
 from pathlib import Path
+from typing import NamedTuple
 
 from asyncblock.models import Finding, ScanSummary, Severity, meets_min_severity
 from asyncblock.rules import RULES, Rule, RuleSet
@@ -345,20 +346,42 @@ def _should_scan_file(
     return not include_patterns or _matches_glob_patterns(relative_path, include_patterns)
 
 
-def _collect_python_files(root_path: Path) -> list[tuple[Path, str]]:
-    """Return ``(absolute_path, relative_path)`` pairs for scannable Python files."""
+class _ScannableFile(NamedTuple):
+    """Absolute path and project-relative path of a Python source file."""
+
+    absolute_path: Path
+    relative_path: str
+
+
+def _collect_python_files(root_path: Path) -> list[_ScannableFile]:
+    """Return scannable Python files under *root_path*."""
     if root_path.is_file():
         if root_path.suffix != ".py":
             return []
-        return [(root_path, root_path.name)]
+        return [_ScannableFile(root_path, root_path.name)]
 
     return [
-        (file_path, str(file_path.relative_to(root_path)))
+        _ScannableFile(file_path, str(file_path.relative_to(root_path)))
         for file_path in sorted(root_path.rglob("*.py"))
     ]
 
 
-def summarize_findings(findings: list[Finding]) -> ScanSummary:
+def _finding_matches_filters(
+    finding: Finding,
+    *,
+    min_severity: Severity,
+    allowed_rule_ids: set[str] | None,
+) -> bool:
+    return meets_min_severity(finding.severity, min_severity) and (
+        allowed_rule_ids is None or finding.rule_id in allowed_rule_ids
+    )
+
+
+def summarize_findings(
+    findings: list[Finding],
+    *,
+    files_scanned: int = 0,
+) -> ScanSummary:
     """Aggregate finding counts by file and rule."""
     files = {finding.file for finding in findings}
     by_rule = Counter(finding.rule_id for finding in findings)
@@ -371,6 +394,7 @@ def summarize_findings(findings: list[Finding]) -> ScanSummary:
         errors=by_severity["error"],
         warnings=by_severity["warning"],
         by_rule=ranked_rules,
+        files_scanned=files_scanned,
     )
 
 
@@ -385,9 +409,51 @@ def filter_findings(
     return [
         finding
         for finding in findings
-        if meets_min_severity(finding.severity, min_severity)
-        and (allowed_rule_ids is None or finding.rule_id in allowed_rule_ids)
+        if _finding_matches_filters(
+            finding,
+            min_severity=min_severity,
+            allowed_rule_ids=allowed_rule_ids,
+        )
     ]
+
+
+@dataclass(frozen=True, slots=True)
+class TreeScanResult:
+    """Findings and scan coverage for a directory or file tree."""
+
+    findings: list[Finding]
+    files_scanned: int
+
+
+def scan_tree(
+    root: PathLike,
+    *,
+    exclude: list[str] | None = None,
+    include: list[str] | None = None,
+    min_severity: Severity = "warning",
+    rule_ids: list[str] | None = None,
+) -> TreeScanResult:
+    """Recursively analyze Python files under *root* and return findings with scan stats."""
+    root_path = Path(root)
+    exclude_patterns = [*(exclude or []), *load_ignore_patterns(root_path)]
+    include_patterns = include or []
+    findings: list[Finding] = []
+    files_scanned = 0
+
+    for scannable in _collect_python_files(root_path):
+        if not _should_scan_file(
+            scannable.relative_path,
+            include_patterns=include_patterns,
+            exclude_patterns=exclude_patterns,
+        ):
+            continue
+        files_scanned += 1
+        findings.extend(analyze_file(scannable.absolute_path))
+
+    return TreeScanResult(
+        findings=filter_findings(findings, min_severity=min_severity, rule_ids=rule_ids),
+        files_scanned=files_scanned,
+    )
 
 
 def analyze_tree(
@@ -399,18 +465,10 @@ def analyze_tree(
     rule_ids: list[str] | None = None,
 ) -> list[Finding]:
     """Recursively analyze Python files under *root* and return aggregated findings."""
-    root_path = Path(root)
-    exclude_patterns = [*(exclude or []), *load_ignore_patterns(root_path)]
-    include_patterns = include or []
-    findings: list[Finding] = []
-
-    for file_path, relative_path in _collect_python_files(root_path):
-        if not _should_scan_file(
-            relative_path,
-            include_patterns=include_patterns,
-            exclude_patterns=exclude_patterns,
-        ):
-            continue
-        findings.extend(analyze_file(file_path))
-
-    return filter_findings(findings, min_severity=min_severity, rule_ids=rule_ids)
+    return scan_tree(
+        root,
+        exclude=exclude,
+        include=include,
+        min_severity=min_severity,
+        rule_ids=rule_ids,
+    ).findings

@@ -89,6 +89,7 @@ def test_scan_command_summary_text_output(capsys) -> None:
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "Summary:" in captured.out
+    assert "scanned" in captured.out.lower()
     assert "BLOCK_SLEEP" in captured.out
     assert captured.err == ""
 
@@ -106,6 +107,7 @@ def test_scan_command_summary_json_output_on_stderr(capsys) -> None:
     summary = json.loads(captured.err.strip())
     assert summary["total"] == len(findings)
     assert summary["files"] >= 1
+    assert summary["files_scanned"] >= 1
     assert isinstance(summary["by_rule"], dict)
 
 
@@ -115,6 +117,7 @@ def test_scan_command_summary_empty_scan(capsys) -> None:
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "no blocking calls found" in captured.out.lower()
+    assert "1 file scanned" in captured.out.lower()
 
 
 def test_scan_command_unix_format(capsys) -> None:

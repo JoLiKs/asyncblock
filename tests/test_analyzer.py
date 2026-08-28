@@ -9,6 +9,7 @@ from asyncblock.analyzer import (
     analyze_source,
     analyze_tree,
     load_ignore_patterns,
+    scan_tree,
     summarize_findings,
 )
 from asyncblock.models import Finding
@@ -260,14 +261,22 @@ def test_analyze_source_invalid_syntax_returns_empty() -> None:
 
 def test_summarize_findings_counts_by_rule_and_file() -> None:
     findings = analyze_tree(FIXTURES)
-    summary = summarize_findings(findings)
+    summary = summarize_findings(findings, files_scanned=13)
 
     assert summary.total == len(findings)
     assert summary.files >= 1
+    assert summary.files_scanned == 13
     assert summary.errors == summary.total
     assert summary.warnings == 0
     assert dict(summary.by_rule)
     assert all(count > 0 for _, count in summary.by_rule)
+
+
+def test_scan_tree_returns_files_scanned_count() -> None:
+    result = scan_tree(FIXTURES, exclude=["block_*.py"])
+
+    assert result.files_scanned >= 1
+    assert result.findings == analyze_tree(FIXTURES, exclude=["block_*.py"])
 
 
 def test_summarize_findings_empty() -> None:
@@ -282,10 +291,11 @@ def test_summarize_findings_empty() -> None:
 
 def test_scan_summary_to_dict() -> None:
     findings = analyze_file(_fixture("block_sleep.py"))
-    data = summarize_findings(findings).to_dict()
+    data = summarize_findings(findings, files_scanned=1).to_dict()
 
     assert data["total"] == 1
     assert data["files"] == 1
+    assert data["files_scanned"] == 1
     assert data["by_rule"] == {"BLOCK_SLEEP": 1}
 
 
